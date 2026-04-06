@@ -4,7 +4,10 @@
   "plugins": [
     {
       "name": "issue-workflow",
-      "source": ".",
+      "source": {
+        "source": "github",
+        "repo": "22a435/issue-workflow"
+      },
       "description": "Autonomous issue-to-PR workflow with 8 Claude Code stages"
     }
   ]
