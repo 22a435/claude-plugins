@@ -1,0 +1,8 @@
+{
+  "name": "deep-review",
+  "version": "1.0.0",
+  "description": "7-stage deep codebase review: context building, interview, tooling, planning, parallel sub-reviews, remediation planning, and remediation",
+  "author": { "name": "22a435" },
+  "repository": "https://github.com/22a435/issue-workflow",
+  "license": "MIT"
+}

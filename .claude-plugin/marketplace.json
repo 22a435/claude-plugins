@@ -1,11 +1,16 @@
 {
-  "name": "issue-workflow",
+  "name": "22a435-workflows",
   "owner": { "name": "22a435" },
   "plugins": [
     {
       "name": "issue-workflow",
-      "source": "./plugin",
+      "source": "./issue-workflow",
       "description": "Autonomous issue-to-PR workflow with 8 Claude Code stages"
+    },
+    {
+      "name": "deep-review",
+      "source": "./deep-review",
+      "description": "7-stage deep codebase review with parallel sub-reviewers and automated remediation"
     }
   ]
 }

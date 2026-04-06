@@ -1,0 +1,476 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# ═══════════════════════════════════════════════════════════════════
+# deep-review - Claude Code deep codebase review orchestrator
+# ═══════════════════════════════════════════════════════════════════
+# Usage: deep-review [--effort high|max] [--model <model>] [--resume <stage>] [--session <N>]
+#
+# Orchestrates a full codebase review by launching sequential
+# Claude Code sessions, each with a dedicated skill and fresh context.
+#
+# Stages run as a state machine. Pre-review stages (interview/
+# update-tooling/plan) can loop freely. The review stage can
+# self-loop for deeper investigation. Remediation-plan can loop
+# back if more tools are needed.
+#
+# Skills request non-default transitions by writing a stage name to
+# ./claude-reviews/<session>/.next-stage
+#
+# Part of the deep-review plugin for Claude Code.
+# https://github.com/22a435/issue-workflow
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Self-location ─────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PLUGIN_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# ── Valid stages (for --resume validation) ────────────────────────
+readonly ALL_STAGES=(setup context-building interview update-tooling plan review remediation-plan remediation)
+
+# ── Transition rules ──────────────────────────────────────────────
+# Each stage maps to its space-delimited list of allowed next stages.
+declare -A ALLOWED_TRANSITIONS=(
+  [setup]="context-building"
+  [context-building]="interview"
+  [interview]="plan update-tooling interview"
+  [update-tooling]="interview"
+  [plan]="review interview update-tooling plan"
+  [review]="remediation-plan review"
+  [remediation-plan]="remediation interview update-tooling remediation-plan"
+  [remediation]="done"
+)
+
+declare -A DEFAULT_NEXT=(
+  [setup]="context-building"
+  [context-building]="interview"
+  [interview]="plan"
+  [update-tooling]="interview"
+  [plan]="review"
+  [review]="remediation-plan"
+  [remediation-plan]="remediation"
+  [remediation]="done"
+)
+
+declare -A STAGE_DESC=(
+  [setup]="Branch, session folder, Session.md, and environment init"
+  [context-building]="Project context, tool discovery, and recommendations"
+  [interview]="Resolve questions, approve tools, set review priorities"
+  [update-tooling]="Install approved tools and persist to repo"
+  [plan]="Draft and approve review plan"
+  [review]="Deep review with parallel sub-reviewers"
+  [remediation-plan]="Draft and approve remediation plan"
+  [remediation]="Apply remediations, create issues, run /simplify"
+)
+
+# ── Skill invocations ─────────────────────────────────────────────
+# Fully qualified names avoid collisions with built-in commands.
+# Override with DEEP_REVIEW_SKILL_PREFIX="" to use short names.
+_PREFIX="${DEEP_REVIEW_SKILL_PREFIX:-deep-review:}"
+
+declare -A STAGE_SKILL=(
+  [context-building]="/${_PREFIX}context-building"
+  [interview]="/${_PREFIX}interview"
+  [update-tooling]="/${_PREFIX}update-tooling"
+  [plan]="/${_PREFIX}plan"
+  [review]="/${_PREFIX}review"
+  [remediation-plan]="/${_PREFIX}remediation-plan"
+  [remediation]="/${_PREFIX}remediation"
+)
+
+declare -A STAGE_DOC=(
+  [context-building]="Context.md"
+  [interview]="Interview.md"
+  [update-tooling]="UpdateTooling.md"
+  [plan]="Plan.md"
+  [review]="Review.md"
+  [remediation-plan]="Remediation-Plan.md"
+  [remediation]="Remediation.md"
+)
+
+# ── Model assignments (configurable via env vars) ─────────────────
+# Override all stages: DEEP_REVIEW_MODEL=sonnet
+# Override one stage: DEEP_REVIEW_MODEL_REVIEW=opus[1m]
+# Per-stage env var takes precedence over the global override.
+declare -A STAGE_MODEL=(
+  [setup]="${DEEP_REVIEW_MODEL_SETUP:-${DEEP_REVIEW_MODEL:-haiku}}"
+  [context-building]="${DEEP_REVIEW_MODEL_CONTEXT_BUILDING:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
+  [interview]="${DEEP_REVIEW_MODEL_INTERVIEW:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
+  [update-tooling]="${DEEP_REVIEW_MODEL_UPDATE_TOOLING:-${DEEP_REVIEW_MODEL:-sonnet[1m]}}"
+  [plan]="${DEEP_REVIEW_MODEL_PLAN:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
+  [review]="${DEEP_REVIEW_MODEL_REVIEW:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
+  [remediation-plan]="${DEEP_REVIEW_MODEL_REMEDIATION_PLAN:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
+  [remediation]="${DEEP_REVIEW_MODEL_REMEDIATION:-${DEEP_REVIEW_MODEL:-sonnet[1m]}}"
+)
+
+# ── Effort assignments (configurable via env vars) ────────────────
+declare -A STAGE_EFFORT=(
+  [setup]="${DEEP_REVIEW_EFFORT_SETUP:-low}"
+  [context-building]="${DEEP_REVIEW_EFFORT_CONTEXT_BUILDING:-high}"
+  [interview]="${DEEP_REVIEW_EFFORT_INTERVIEW:-high}"
+  [update-tooling]="${DEEP_REVIEW_EFFORT_UPDATE_TOOLING:-high}"
+  [plan]="${DEEP_REVIEW_EFFORT_PLAN:-high}"
+  [review]="${DEEP_REVIEW_EFFORT_REVIEW:-max}"
+  [remediation-plan]="${DEEP_REVIEW_EFFORT_REMEDIATION_PLAN:-high}"
+  [remediation]="${DEEP_REVIEW_EFFORT_REMEDIATION:-high}"
+)
+
+# ── Defaults ──────────────────────────────────────────────────────
+EFFORT="${CLAUDE_CODE_EFFORT_LEVEL:-high}"
+EFFORT_EXPLICIT=false
+RESUME_FROM=""
+SESSION_EXPLICIT=""
+
+# ── Usage / help ──────────────────────────────────────────────────
+usage() {
+  cat <<'EOF'
+Usage: deep-review [OPTIONS]
+
+Orchestrates a deep codebase review using Claude Code skills.
+Stages run as a state machine -- pre-review stages can loop freely,
+the review stage can self-loop for deeper investigation.
+
+Options:
+  --effort <level>   Effort level: high (default) or max
+  --model <model>    Override model for all stages (e.g., sonnet, opus[1m])
+  --resume <stage>   Resume from a specific stage (requires --session)
+  --session <N>      Use a specific session number (auto-increments if omitted)
+  --help             Show this help message
+
+Stages:
+  setup              Create branch, session folder, Session.md; run repo setup
+  context-building   Analyze project, discover tools, recommend additions
+  interview          Resolve questions, approve tools, set review priorities
+  update-tooling     Install approved tools, persist to repo setup scripts
+  plan               Draft and approve comprehensive review plan
+  review             Deep review with up to 10 parallel sub-reviewers
+  remediation-plan   Draft and approve remediation plan from findings
+  remediation        Apply fixes, create issues, run /simplify cleanup
+
+Stage transitions:
+  Context-building always advances to interview.
+  Interview, update-tooling, and plan can loop between each other.
+  Review can self-loop for deeper investigation.
+  Remediation-plan can loop back for more tools.
+  Skills signal non-default transitions via .next-stage file.
+
+Configuration (env vars):
+  DEEP_REVIEW_MODEL                Override model for all stages
+  DEEP_REVIEW_MODEL_<STAGE>        Override model for one stage (e.g., _REVIEW)
+  DEEP_REVIEW_EFFORT_<STAGE>       Override effort for one stage
+  DEEP_REVIEW_SKILL_PREFIX         Skill name prefix (e.g., "deep-review:")
+
+Examples:
+  deep-review                              # New review session
+  deep-review --effort max                 # Use max effort level
+  deep-review --model opus[1m]             # Use opus for all stages
+  deep-review --resume plan --session 3    # Resume session 3 from planning
+  deep-review --resume review --session 1  # Re-run review for session 1
+EOF
+  exit "${1:-0}"
+}
+
+# ── Parse arguments ───────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --effort) EFFORT="${2:?--effort requires a value (high or max)}"; EFFORT_EXPLICIT=true; shift 2 ;;
+    --model)
+      DEEP_REVIEW_MODEL="${2:?--model requires a value}"
+      export DEEP_REVIEW_MODEL
+      # Re-apply to all stages
+      for _s in "${ALL_STAGES[@]}"; do
+        STAGE_MODEL[$_s]="${DEEP_REVIEW_MODEL}"
+      done
+      shift 2
+      ;;
+    --resume) RESUME_FROM="${2:?--resume requires a stage name}"; shift 2 ;;
+    --session) SESSION_EXPLICIT="${2:?--session requires a number}"; shift 2 ;;
+    --help)   usage 0 ;;
+    *)        echo "Error: unknown option: $1"; usage 1 ;;
+  esac
+done
+
+export CLAUDE_CODE_EFFORT_LEVEL="$EFFORT"
+
+# Validate resume stage if provided
+if [[ -n "$RESUME_FROM" ]]; then
+  valid=false
+  for s in "${ALL_STAGES[@]}"; do
+    [[ "$s" == "$RESUME_FROM" ]] && valid=true
+  done
+  if [[ "$valid" != "true" ]]; then
+    echo "Error: invalid stage '${RESUME_FROM}'"
+    echo "Valid stages: ${ALL_STAGES[*]}"
+    exit 1
+  fi
+  if [[ -z "$SESSION_EXPLICIT" && "$RESUME_FROM" != "setup" ]]; then
+    echo "Error: --resume requires --session <N> (which session to resume)"
+    exit 1
+  fi
+fi
+
+# ── Validate environment ──────────────────────────────────────────
+for cmd in gh claude git jq; do
+  command -v "$cmd" >/dev/null 2>&1 || {
+    echo "Error: required command '${cmd}' not found"; exit 1
+  }
+done
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "Error: not inside a git repository"; exit 1
+}
+cd "$REPO_ROOT"
+
+# ── Session numbering ────────────────────────────────────────────
+REVIEW_BASE="${REPO_ROOT}/claude-reviews"
+mkdir -p "$REVIEW_BASE"
+
+if [[ -n "$SESSION_EXPLICIT" ]]; then
+  SESSION="$SESSION_EXPLICIT"
+else
+  LAST_SESSION=$(ls -1d "${REVIEW_BASE}"/[0-9]* 2>/dev/null | xargs -I{} basename {} | sort -n | tail -1)
+  SESSION=$(( ${LAST_SESSION:-0} + 1 ))
+fi
+
+WORK_DIR="${REVIEW_BASE}/${SESSION}"
+BRANCH="claude/review/${SESSION}"
+GITHUB_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "unknown")"
+
+# ── Banner ────────────────────────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo "  Deep Review Session #${SESSION}"
+echo "  Repo:   ${GITHUB_REPO}"
+echo "  Branch: ${BRANCH}"
+echo "  Effort: ${EFFORT}"
+[[ -n "$RESUME_FROM" ]] && echo "  Resume: from ${RESUME_FROM}"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+# ── Helpers ───────────────────────────────────────────────────────
+stage_banner() {
+  local stage="$1" desc="$2" model="$3" effort="$4"
+  echo ""
+  echo "───────────────────────────────────────────────────────────"
+  echo "  Stage: ${stage} -- ${desc}"
+  echo "  Model: ${model}  Effort: ${effort}"
+  echo "───────────────────────────────────────────────────────────"
+  echo ""
+}
+
+resolve_stage_effort() {
+  local stage="$1"
+  if [[ "$EFFORT_EXPLICIT" == "true" ]]; then
+    echo "$EFFORT"
+  else
+    echo "${STAGE_EFFORT[$stage]:-$EFFORT}"
+  fi
+}
+
+refresh_env() {
+  # After a stage installs tools (via setup scripts, package managers, etc.),
+  # PATH in this shell is stale. Spawn a fresh interactive login shell to pick
+  # up changes from ~/.bashrc, ~/.profile, /etc/profile.d/*, etc.
+  local new_path
+  new_path="$(bash -lic 'echo "$PATH"' 2>/dev/null)" || return 0
+  if [[ -n "$new_path" ]]; then
+    export PATH="$new_path"
+  fi
+}
+
+check_document() {
+  local doc="$1"
+  if [[ -f "${WORK_DIR}/${doc}" ]]; then
+    echo "[ok] ${doc} exists."
+    return 0
+  else
+    echo "[!!] ${doc} not found. Stage may not have completed successfully."
+    read -rp "Continue to next stage anyway? [y/N] " yn
+    case "$yn" in
+      [Yy]*) return 0 ;;
+      *)     echo "Aborting. Re-run with: deep-review --resume <stage> --session ${SESSION}"
+             exit 1 ;;
+    esac
+  fi
+}
+
+validate_transition() {
+  local from="$1" to="$2"
+  local allowed="${ALLOWED_TRANSITIONS[$from]:-}"
+  for stage in $allowed; do
+    [[ "$stage" == "$to" ]] && return 0
+  done
+  return 1
+}
+
+resolve_next_stage() {
+  local current="$1"
+  local signal_file="${WORK_DIR}/.next-stage"
+
+  if [[ -f "$signal_file" ]]; then
+    local next
+    next="$(< "$signal_file")"
+    rm -f "$signal_file"
+    next="${next//[[:space:]]/}"  # trim whitespace
+
+    if [[ -n "$next" ]] && validate_transition "$current" "$next"; then
+      echo "[signal] Stage '${current}' requested transition to '${next}'" >&2
+      echo "$next"
+      return
+    elif [[ -n "$next" ]]; then
+      echo "[signal] WARNING: Stage '${current}' requested '${next}' but that transition is not allowed. Using default." >&2
+    fi
+  fi
+
+  echo "${DEFAULT_NEXT[$current]}"
+}
+
+clean_signal_file() {
+  rm -f "${WORK_DIR}/.next-stage"
+}
+
+# ── Loop safety ───────────────────────────────────────────────────
+MAX_STAGE_RUNS=25
+stage_run_count=0
+declare -A STAGE_RUN_COUNTS
+
+# ── Determine starting stage ─────────────────────────────────────
+current_stage="setup"
+if [[ -n "$RESUME_FROM" ]]; then
+  current_stage="$RESUME_FROM"
+fi
+
+# ── Ensure correct branch (needed for resume or wrong checkout) ──
+if [[ "$current_stage" != "setup" ]]; then
+  git fetch origin main 2>/dev/null || true
+  current_branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+  if [[ "$current_branch" != "$BRANCH" ]]; then
+    if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
+      echo "Switching to branch ${BRANCH} (was on ${current_branch:-detached HEAD})."
+      git checkout "$BRANCH"
+    else
+      echo "Error: branch ${BRANCH} does not exist. Cannot resume without it."
+      echo "Run without --resume to start from setup."
+      exit 1
+    fi
+  fi
+  git pull origin "$BRANCH" 2>/dev/null || true
+fi
+
+# ══════════════════════════════════════════════════════════════════
+#  MAIN STATE MACHINE
+# ══════════════════════════════════════════════════════════════════
+while [[ "$current_stage" != "done" ]]; do
+  # Loop safety: global limit
+  stage_run_count=$((stage_run_count + 1))
+  if [[ $stage_run_count -gt $MAX_STAGE_RUNS ]]; then
+    echo ""
+    echo "ERROR: Exceeded maximum stage executions (${MAX_STAGE_RUNS}). Possible infinite loop."
+    echo "Last stage: ${current_stage}"
+    echo "Re-run with --resume <stage> --session ${SESSION} to continue manually."
+    exit 1
+  fi
+
+  # Loop safety: per-stage limit
+  STAGE_RUN_COUNTS[$current_stage]=$(( ${STAGE_RUN_COUNTS[$current_stage]:-0} + 1 ))
+  if [[ ${STAGE_RUN_COUNTS[$current_stage]} -gt 5 ]]; then
+    echo ""
+    echo "WARNING: Stage '${current_stage}' has run ${STAGE_RUN_COUNTS[$current_stage]} times."
+    read -rp "Continue? [y/N] " yn
+    case "$yn" in
+      [Yy]*) ;;
+      *)     echo "Aborting. Re-run with --resume to continue manually."
+             exit 1 ;;
+    esac
+  fi
+
+  # Refresh PATH from login shell to pick up tools installed by prior stages
+  refresh_env
+
+  # Resolve model and effort for this stage
+  stage_model="${STAGE_MODEL[$current_stage]}"
+  stage_effort="$(resolve_stage_effort "$current_stage")"
+
+  stage_banner "$current_stage" "${STAGE_DESC[$current_stage]}" "$stage_model" "$stage_effort"
+
+  case "$current_stage" in
+    # ── SETUP (inline -- unique logic, not a skill) ────────────
+    setup)
+      # Create or switch to branch
+      git fetch origin main 2>/dev/null || true
+      if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
+        echo "Branch ${BRANCH} exists. Switching to it."
+        git checkout "$BRANCH"
+        git pull origin "$BRANCH" 2>/dev/null || true
+      else
+        echo "Creating branch ${BRANCH} from origin/main."
+        git checkout -b "$BRANCH" origin/main
+      fi
+
+      # Create work directory and sub-reviews directory
+      mkdir -p "${WORK_DIR}/sub-reviews"
+
+      # Write Session.md
+      cat > "${WORK_DIR}/Session.md" << SESSION_EOF
+# Deep Review Session #${SESSION}
+
+## Source
+- **Repository:** ${GITHUB_REPO}
+- **Branch:** \`${BRANCH}\`
+- **Started:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+SESSION_EOF
+
+      # Commit and push
+      git add "${WORK_DIR}/Session.md"
+      git commit -m "claude-review: begin review session #${SESSION}"
+      git push -u origin "$BRANCH"
+
+      # Run environment setup via Claude
+      echo ""
+      echo "Launching Claude to run repo-specific setup..."
+      echo ""
+      claude --model "$stage_model" --effort "$stage_effort" "This is a fresh development environment for a deep code review. Check this repo's CLAUDE.md, README, and look for setup scripts (scripts/setup.sh, Makefile setup targets, package.json scripts, etc.). Run whatever is needed to initialize the development environment. Report what you did when complete."
+
+      current_stage="context-building"
+      ;;
+
+    # ── ALL SKILL-BASED STAGES ─────────────────────────────────
+    context-building|interview|update-tooling|plan|review|remediation-plan|remediation)
+      clean_signal_file
+      claude --model "$stage_model" --effort "$stage_effort" "${STAGE_SKILL[$current_stage]} ${SESSION}"
+
+      doc="${STAGE_DOC[$current_stage]:-}"
+      if [[ -n "$doc" ]]; then
+        check_document "$doc"
+      fi
+
+      previous_stage="$current_stage"
+      current_stage="$(resolve_next_stage "$current_stage")"
+      ;;
+
+    *)
+      echo "ERROR: unknown stage '${current_stage}'"
+      exit 1
+      ;;
+  esac
+done
+
+# ══════════════════════════════════════════════════════════════════
+#  COMPLETE
+# ══════════════════════════════════════════════════════════════════
+
+# Mark the PR as ready for review (no longer draft)
+echo "Marking PR as ready for review..."
+gh pr ready "$BRANCH" 2>/dev/null && echo "PR marked as ready." || echo "WARNING: Could not mark PR as ready (may already be non-draft or PR not found)."
+
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo "  Deep review session #${SESSION} complete"
+echo "  Branch: ${BRANCH}"
+echo "  Work:   ${WORK_DIR}/"
+echo ""
+echo "  The PR is ready for final human review and merge."
+echo "  Review artifacts and code fixes are on the branch."
+echo "  To re-run a stage:"
+echo "    deep-review --resume <stage> --session ${SESSION}"
+echo "═══════════════════════════════════════════════════════════"
