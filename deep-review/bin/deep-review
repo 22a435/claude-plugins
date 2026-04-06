@@ -18,7 +18,7 @@ set -uo pipefail
 # ./claude-reviews/<session>/.next-stage
 #
 # Part of the deep-review plugin for Claude Code.
-# https://github.com/22a435/issue-workflow
+# https://github.com/22a435/claude-plugins
 # ═══════════════════════════════════════════════════════════════════
 
 # ── Self-location ─────────────────────────────────────────────────

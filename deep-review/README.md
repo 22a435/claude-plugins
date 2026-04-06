@@ -18,7 +18,7 @@ The review stage is the core: it launches up to 10 specialized sub-reviewer agen
 
 ```bash
 # Add the marketplace (if not already added)
-claude plugin marketplace add 22a435/issue-workflow
+claude plugin marketplace add 22a435/claude-plugins
 
 # Install the deep-review plugin
 claude plugin install 22a435-workflows@deep-review --scope user

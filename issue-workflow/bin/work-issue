@@ -18,7 +18,7 @@ set -uo pipefail
 # ./claude-work/<issue>/.next-stage
 #
 # Part of the issue-workflow plugin for Claude Code.
-# https://github.com/22a435/issue-workflow
+# https://github.com/22a435/claude-plugins
 # ═══════════════════════════════════════════════════════════════════
 
 # ── Self-location ─────────────────────────────────────────────────

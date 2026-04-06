@@ -28,7 +28,7 @@ Stages: setup → context-building → interview ↔ update-tooling → plan →
 
 ```bash
 # Add the marketplace
-claude plugin marketplace add 22a435/issue-workflow
+claude plugin marketplace add 22a435/claude-plugins
 
 # Install one or both plugins
 claude plugin install 22a435-workflows@issue-workflow --scope user
