@@ -1,6 +1,7 @@
 ---
 name: debug
 description: Root cause analysis and fix for problems escalated from execute, verify, or review. Runs as a dedicated orchestrator stage with a fresh context window. Invoke with /debug <issue-number>.
+disable-model-invocation: true
 allowed-tools: Read, Grep, Glob, Bash, Agent, Write, Edit, WebSearch, WebFetch
 ---
 
@@ -14,13 +15,14 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 
 - **Branch:** `claude/<issue-number>` (created by the orchestrator during setup)
 - **Work directory:** `./claude-work/<issue-number>/` -- each stage produces one document here
-- **Document ownership:** You may READ any prior document. Only WRITE to your own output document. When re-triggered, APPEND new sections -- never delete or overwrite existing content. Mark in-place edits with `> [IN-PLACE EDIT during <stage> phase]: <reason>`.
+- **Document ownership:** You may READ any prior document. Only WRITE to your own output document inside `./claude-work/$0/` (where `$0` is the numeric GitHub issue ID passed as your argument). Never create files, directories, or write anywhere else under `./claude-work/`. When re-triggered, APPEND new sections -- never delete or overwrite existing content. Mark in-place edits with `> [IN-PLACE EDIT during <stage> phase]: <reason>`.
 - **Commits:** Format: `claude-work(<stage>): <description> [#<issue>]`. Commit and push after completing the stage.
 - **PR updates:** Post a summary to the PR thread (via `gh pr comment`) after each stage.
 - **Subagent cost optimization:** Downgrade codebase investigation agents (Explore) and external research agents to `model: "sonnet"`. Keep the parent session's model for hypothesis-testing agents that require full reasoning capability.
+- **Subagent write boundary:** Subagents must NOT create, edit, or write any files under `./claude-work/`. They may modify source code files elsewhere in the repo. Only this parent session writes to `./claude-work/$0/`. Include this constraint in every subagent prompt you compose.
 
 ## Context
-- **Issue number:** $0
+- **Issue number:** $0 (numeric GitHub issue ID -- not a title, keyword, or topic name)
 - **Work directory:** `./claude-work/$0/`
 - **Origin stage:** Read `./claude-work/$0/.debug-origin` to identify which stage triggered this debug session. Focus your investigation on that stage's output document.
 - **Input documents:**

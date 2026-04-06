@@ -1,6 +1,7 @@
 ---
 name: execute
 description: Implement the approved plan using parallel subagents. Documents failures and signals debug when components fail verification. Invoke with /execute <issue-number>.
+disable-model-invocation: true
 allowed-tools: Read, Grep, Glob, Bash, Agent, Write, Edit, WebSearch, WebFetch
 ---
 
@@ -14,13 +15,14 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 
 - **Branch:** `claude/<issue-number>` (created by the orchestrator during setup)
 - **Work directory:** `./claude-work/<issue-number>/` -- each stage produces one document here
-- **Document ownership:** You may READ any prior document. Only WRITE to your own output document. When re-triggered, APPEND new sections -- never delete or overwrite existing content. Mark in-place edits with `> [IN-PLACE EDIT during <stage> phase]: <reason>`.
+- **Document ownership:** You may READ any prior document. Only WRITE to your own output document inside `./claude-work/$0/` (where `$0` is the numeric GitHub issue ID passed as your argument). Never create files, directories, or write anywhere else under `./claude-work/`. When re-triggered, APPEND new sections -- never delete or overwrite existing content. Mark in-place edits with `> [IN-PLACE EDIT during <stage> phase]: <reason>`.
 - **Commits:** Format: `claude-work(<stage>): <description> [#<issue>]`. Commit and push after completing the stage.
 - **PR updates:** Post a summary to the PR thread (via `gh pr comment`) after each stage.
 - **Subagent cost optimization:** Implementation agents should keep this session's model (do NOT specify a model override). Information-gathering agents (Explore, web research, context7 lookups) should use `model: "sonnet"` to reduce cost.
+- **Subagent write boundary:** Subagents must NOT create, edit, or write any files under `./claude-work/`. They may modify source code files elsewhere in the repo. Only this parent session writes to `./claude-work/$0/`. Include this constraint in every subagent prompt you compose.
 
 ## Context
-- **Issue number:** $0
+- **Issue number:** $0 (numeric GitHub issue ID -- not a title, keyword, or topic name)
 - **Work directory:** `./claude-work/$0/`
 - **Primary input:** `./claude-work/$0/Plan.md`
 - **Query access:** `Issue.md`, `Research.md`, `Interview.md` (read as needed, do not modify)

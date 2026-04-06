@@ -1,6 +1,7 @@
 ---
 name: review
 description: Code quality review of all changes. Checks correctness, style, security, documentation. Requires user approval for functional changes. Invoke with /review <issue-number>.
+disable-model-invocation: true
 allowed-tools: Read, Grep, Glob, Bash, Agent, Write, Edit, WebSearch, WebFetch, Skill
 ---
 
@@ -14,13 +15,14 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 
 - **Branch:** `claude/<issue-number>` (created by the orchestrator during setup)
 - **Work directory:** `./claude-work/<issue-number>/` -- each stage produces one document here
-- **Document ownership:** You may READ any prior document. Only WRITE to your own output document. When re-triggered, APPEND new sections -- never delete or overwrite existing content. Mark in-place edits with `> [IN-PLACE EDIT during <stage> phase]: <reason>`.
+- **Document ownership:** You may READ any prior document. Only WRITE to your own output document inside `./claude-work/$0/` (where `$0` is the numeric GitHub issue ID passed as your argument). Never create files, directories, or write anywhere else under `./claude-work/`. When re-triggered, APPEND new sections -- never delete or overwrite existing content. Mark in-place edits with `> [IN-PLACE EDIT during <stage> phase]: <reason>`.
 - **Commits:** Format: `claude-work(<stage>): <description> [#<issue>]`. Commit and push after completing the stage.
 - **PR updates:** Post a summary to the PR thread (via `gh pr comment`) after each stage.
 - **Subagent cost optimization:** Review agents performing code analysis should use `model: "sonnet"` -- they are scanning for patterns and reporting findings. Keep the parent session's model for synthesizing results and making severity judgments.
+- **Subagent write boundary:** Subagents in this stage must NOT create, edit, or write any files under `./claude-work/`. Only this parent session writes the output document. Include this constraint in every subagent prompt you compose.
 
 ## Context
-- **Issue number:** $0
+- **Issue number:** $0 (numeric GitHub issue ID -- not a title, keyword, or topic name)
 - **Work directory:** `./claude-work/$0/`
 - **All documents available for reference** (read as needed, do not modify others)
 - **Output document:** `./claude-work/$0/Review.md`
