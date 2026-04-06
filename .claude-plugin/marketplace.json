@@ -1,0 +1,11 @@
+{
+  "name": "issue-workflow",
+  "owner": { "name": "22a435" },
+  "plugins": [
+    {
+      "name": "issue-workflow",
+      "source": ".",
+      "description": "Autonomous issue-to-PR workflow with 8 Claude Code stages"
+    }
+  ]
+}

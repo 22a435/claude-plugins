@@ -1,0 +1,546 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# ═══════════════════════════════════════════════════════════════════
+# work-issue - Claude Code autonomous workflow orchestrator
+# ═══════════════════════════════════════════════════════════════════
+# Usage: work-issue <issue-number> [--effort high|max] [--model <model>] [--resume <stage>]
+#
+# Orchestrates a full issue-to-PR workflow by launching sequential
+# Claude Code sessions, each with a dedicated skill and fresh context.
+#
+# Stages run as a state machine, not a rigid sequence. Pre-execution
+# stages (research/interview/plan) can loop freely. Post-execution
+# stages (verify/review/integrate) can loop back to verify. A hard
+# wall separates planning from execution.
+#
+# Skills request non-default transitions by writing a stage name to
+# ./claude-work/<issue>/.next-stage
+#
+# Part of the issue-workflow plugin for Claude Code.
+# https://github.com/22a435/issue-workflow
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Self-location ─────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PLUGIN_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# ── Valid stages (for --resume validation) ────────────────────────
+readonly ALL_STAGES=(setup research interview plan execute debug verify review integrate)
+
+# ── Transition rules ──────────────────────────────────────────────
+# Each stage maps to its space-delimited list of allowed next stages.
+declare -A ALLOWED_TRANSITIONS=(
+  [setup]="research"
+  [research]="interview research"
+  [interview]="plan research interview"
+  [plan]="execute research interview plan"
+  [execute]="verify debug"
+  [debug]="execute verify review"
+  [verify]="review verify debug"
+  [review]="integrate verify review debug"
+  [integrate]="verify integrate done"
+)
+
+declare -A DEFAULT_NEXT=(
+  [setup]="research"
+  [research]="interview"
+  [interview]="plan"
+  [plan]="execute"
+  [execute]="verify"
+  [debug]="verify"
+  [verify]="review"
+  [review]="integrate"
+  [integrate]="verify"
+)
+
+declare -A STAGE_DESC=(
+  [setup]="Branch, work folder, Issue.md, and environment init"
+  [research]="Deep investigation of the issue"
+  [interview]="Resolve open questions with user"
+  [plan]="Draft and approve implementation plan"
+  [execute]="Implement the plan"
+  [debug]="Root cause analysis and fix for escalated problems"
+  [verify]="Full verification suite"
+  [review]="Code quality review"
+  [integrate]="Prepare branch for merge"
+)
+
+# ── Skill invocations ─────────────────────────────────────────────
+# Plugin skills may be namespaced. Set ISSUE_WORKFLOW_SKILL_PREFIX
+# to "issue-workflow:" if there are name conflicts with other skills.
+_PREFIX="${ISSUE_WORKFLOW_SKILL_PREFIX:-}"
+
+declare -A STAGE_SKILL=(
+  [research]="/${_PREFIX}research"
+  [interview]="/${_PREFIX}interview"
+  [plan]="/${_PREFIX}plan"
+  [execute]="/${_PREFIX}execute"
+  [debug]="/${_PREFIX}debug"
+  [verify]="/${_PREFIX}verify"
+  [review]="/${_PREFIX}review"
+  [integrate]="/${_PREFIX}integrate"
+)
+
+declare -A STAGE_DOC=(
+  [research]="Research.md"
+  [interview]="Interview.md"
+  [plan]="Plan.md"
+  [execute]="Execute.md"
+  [debug]="Debug.md"
+  [verify]="Verify.md"
+  [review]="Review.md"
+  [integrate]="Integration.md"
+)
+
+# ── Model assignments (configurable via env vars) ─────────────────
+# Override all stages: ISSUE_WORKFLOW_MODEL=sonnet
+# Override one stage: ISSUE_WORKFLOW_MODEL_RESEARCH=opus[1m]
+# Per-stage env var takes precedence over the global override.
+declare -A STAGE_MODEL=(
+  [setup]="${ISSUE_WORKFLOW_MODEL_SETUP:-${ISSUE_WORKFLOW_MODEL:-haiku}}"
+  [research]="${ISSUE_WORKFLOW_MODEL_RESEARCH:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
+  [interview]="${ISSUE_WORKFLOW_MODEL_INTERVIEW:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
+  [plan]="${ISSUE_WORKFLOW_MODEL_PLAN:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
+  [execute]="${ISSUE_WORKFLOW_MODEL_EXECUTE:-${ISSUE_WORKFLOW_MODEL:-sonnet[1m]}}"
+  [debug]="${ISSUE_WORKFLOW_MODEL_DEBUG:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
+  [verify]="${ISSUE_WORKFLOW_MODEL_VERIFY:-${ISSUE_WORKFLOW_MODEL:-sonnet[1m]}}"
+  [review]="${ISSUE_WORKFLOW_MODEL_REVIEW:-${ISSUE_WORKFLOW_MODEL:-sonnet[1m]}}"
+  [integrate]="${ISSUE_WORKFLOW_MODEL_INTEGRATE:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
+)
+
+# ── Effort assignments (configurable via env vars) ────────────────
+declare -A STAGE_EFFORT=(
+  [setup]="${ISSUE_WORKFLOW_EFFORT_SETUP:-low}"
+  [research]="${ISSUE_WORKFLOW_EFFORT_RESEARCH:-high}"
+  [interview]="${ISSUE_WORKFLOW_EFFORT_INTERVIEW:-high}"
+  [plan]="${ISSUE_WORKFLOW_EFFORT_PLAN:-high}"
+  [execute]="${ISSUE_WORKFLOW_EFFORT_EXECUTE:-high}"
+  [debug]="${ISSUE_WORKFLOW_EFFORT_DEBUG:-high}"
+  [verify]="${ISSUE_WORKFLOW_EFFORT_VERIFY:-high}"
+  [review]="${ISSUE_WORKFLOW_EFFORT_REVIEW:-high}"
+  [integrate]="${ISSUE_WORKFLOW_EFFORT_INTEGRATE:-high}"
+)
+
+# ── Defaults ──────────────────────────────────────────────────────
+EFFORT="${CLAUDE_CODE_EFFORT_LEVEL:-high}"
+EFFORT_EXPLICIT=false
+RESUME_FROM=""
+ISSUE=""
+
+# ── Usage / help ──────────────────────────────────────────────────
+usage() {
+  cat <<'EOF'
+Usage: work-issue <issue-number> [OPTIONS]
+
+Orchestrates a full issue-to-PR workflow using Claude Code skills.
+Stages run as a state machine -- pre-execution stages can loop freely,
+post-execution stages can loop back to verify.
+
+Options:
+  --effort <level>   Effort level: high (default) or max
+  --model <model>    Override model for all stages (e.g., sonnet, opus[1m])
+  --resume <stage>   Resume from a specific stage (skips prior stages)
+  --help             Show this help message
+
+Stages:
+  setup        Create branch, work folder, Issue.md; run repo setup
+  research     Deep codebase + web + library investigation
+  interview    Resolve open questions with user input
+  plan         Draft and approve implementation plan; open draft PR
+  ── hard wall ── (no going back once execution starts)
+  execute      Implement the plan; signals debug on failure
+  debug        Root cause analysis and fix (triggered by execute/verify/review)
+  verify       Full verification suite; signals debug on failure
+  review       Code quality review; signals debug for critical/important issues
+  integrate    Rebase/merge main; skips to done if main hasn't moved
+
+Stage transitions:
+  Research, interview, and plan can loop back to earlier stages.
+  Execute, verify, and review signal debug when they encounter failures.
+  Debug returns to the stage that triggered it after fixing the issue.
+  Review signals verify when it makes code changes.
+  Integrate signals done (main clean) or verify (after rebase).
+  Skills signal non-default transitions via .next-stage file.
+
+Configuration (env vars):
+  ISSUE_WORKFLOW_MODEL              Override model for all stages
+  ISSUE_WORKFLOW_MODEL_<STAGE>      Override model for one stage (e.g., _RESEARCH)
+  ISSUE_WORKFLOW_EFFORT_<STAGE>     Override effort for one stage
+  ISSUE_WORKFLOW_SKILL_PREFIX       Skill name prefix (e.g., "issue-workflow:")
+
+Examples:
+  work-issue 42                     # Full workflow for issue #42
+  work-issue 42 --effort max        # Use max effort level
+  work-issue 42 --model sonnet      # Use sonnet for all stages
+  work-issue 42 --resume plan       # Resume from planning stage
+  work-issue 42 --resume verify     # Re-run verification
+EOF
+  exit "${1:-0}"
+}
+
+# ── Parse arguments ───────────────────────────────────────────────
+[[ $# -lt 1 ]] && usage 1
+[[ "$1" == "--help" ]] && usage 0
+
+ISSUE="$1"
+shift
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --effort) EFFORT="${2:?--effort requires a value (high or max)}"; EFFORT_EXPLICIT=true; shift 2 ;;
+    --model)
+      ISSUE_WORKFLOW_MODEL="${2:?--model requires a value}"
+      export ISSUE_WORKFLOW_MODEL
+      # Re-apply to all stages
+      for _s in "${ALL_STAGES[@]}"; do
+        STAGE_MODEL[$_s]="${ISSUE_WORKFLOW_MODEL}"
+      done
+      shift 2
+      ;;
+    --resume) RESUME_FROM="${2:?--resume requires a stage name}"; shift 2 ;;
+    --help)   usage 0 ;;
+    *)        echo "Error: unknown option: $1"; usage 1 ;;
+  esac
+done
+
+export CLAUDE_CODE_EFFORT_LEVEL="$EFFORT"
+
+# Validate resume stage if provided
+if [[ -n "$RESUME_FROM" ]]; then
+  valid=false
+  for s in "${ALL_STAGES[@]}"; do
+    [[ "$s" == "$RESUME_FROM" ]] && valid=true
+  done
+  if [[ "$valid" != "true" ]]; then
+    echo "Error: invalid stage '${RESUME_FROM}'"
+    echo "Valid stages: ${ALL_STAGES[*]}"
+    exit 1
+  fi
+fi
+
+# ── Validate environment ──────────────────────────────────────────
+for cmd in gh claude git jq; do
+  command -v "$cmd" >/dev/null 2>&1 || {
+    echo "Error: required command '${cmd}' not found"; exit 1
+  }
+done
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "Error: not inside a git repository"; exit 1
+}
+cd "$REPO_ROOT"
+
+# NOTE: Permissions are handled by settings.json (defaultMode: bypassPermissions).
+# If that doesn't work in practice, add --dangerously-skip-permissions to each
+# claude invocation below.
+
+# ── Read issue from GitHub ────────────────────────────────────────
+echo "Reading issue #${ISSUE}..."
+ISSUE_JSON="$(gh issue view "$ISSUE" --json title,body,labels 2>/dev/null)" || {
+  echo "Error: could not read issue #${ISSUE}. Check gh auth and issue number."
+  exit 1
+}
+ISSUE_TITLE="$(echo "$ISSUE_JSON" | jq -r '.title')"
+ISSUE_BODY="$(echo "$ISSUE_JSON" | jq -r '.body')"
+ISSUE_LABELS="$(echo "$ISSUE_JSON" | jq -r '[.labels[].name] | join(", ")')"
+GITHUB_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+
+BRANCH="claude/${ISSUE}"
+WORK_DIR="${REPO_ROOT}/claude-work/${ISSUE}"
+
+# ── Banner ────────────────────────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo "  Issue #${ISSUE}: ${ISSUE_TITLE}"
+echo "  Repo:   ${GITHUB_REPO}"
+echo "  Branch: ${BRANCH}"
+echo "  Effort: ${EFFORT}"
+[[ -n "$RESUME_FROM" ]] && echo "  Resume: from ${RESUME_FROM}"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+# ── Helpers ───────────────────────────────────────────────────────
+stage_banner() {
+  local stage="$1" desc="$2" model="$3" effort="$4"
+  echo ""
+  echo "───────────────────────────────────────────────────────────"
+  echo "  Stage: ${stage} -- ${desc}"
+  echo "  Model: ${model}  Effort: ${effort}"
+  echo "───────────────────────────────────────────────────────────"
+  echo ""
+}
+
+resolve_stage_effort() {
+  local stage="$1"
+  if [[ "$EFFORT_EXPLICIT" == "true" ]]; then
+    echo "$EFFORT"
+  else
+    echo "${STAGE_EFFORT[$stage]:-$EFFORT}"
+  fi
+}
+
+refresh_env() {
+  # After a stage installs tools (via setup scripts, package managers, etc.),
+  # PATH in this shell is stale. Spawn a fresh interactive login shell to pick
+  # up changes from ~/.bashrc, ~/.profile, /etc/profile.d/*, etc.
+  # NOTE: must be -lic (interactive), not just -lc. Ubuntu's .bashrc exits
+  # early for non-interactive shells, skipping nvm/fnm/volta init.
+  local new_path
+  new_path="$(bash -lic 'echo "$PATH"' 2>/dev/null)" || return 0
+  if [[ -n "$new_path" ]]; then
+    export PATH="$new_path"
+  fi
+}
+
+check_document() {
+  local doc="$1"
+  if [[ -f "${WORK_DIR}/${doc}" ]]; then
+    echo "[ok] ${doc} exists."
+    return 0
+  else
+    echo "[!!] ${doc} not found. Stage may not have completed successfully."
+    read -rp "Continue to next stage anyway? [y/N] " yn
+    case "$yn" in
+      [Yy]*) return 0 ;;
+      *)     echo "Aborting. Re-run with: work-issue ${ISSUE} --resume <stage>"
+             exit 1 ;;
+    esac
+  fi
+}
+
+validate_transition() {
+  local from="$1" to="$2"
+  local allowed="${ALLOWED_TRANSITIONS[$from]:-}"
+  for stage in $allowed; do
+    [[ "$stage" == "$to" ]] && return 0
+  done
+  return 1
+}
+
+resolve_next_stage() {
+  local current="$1"
+  local signal_file="${WORK_DIR}/.next-stage"
+
+  if [[ -f "$signal_file" ]]; then
+    local next
+    next="$(< "$signal_file")"
+    rm -f "$signal_file"
+    next="${next//[[:space:]]/}"  # trim whitespace
+
+    if [[ -n "$next" ]] && validate_transition "$current" "$next"; then
+      echo "[signal] Stage '${current}' requested transition to '${next}'" >&2
+      echo "$next"
+      return
+    elif [[ -n "$next" ]]; then
+      echo "[signal] WARNING: Stage '${current}' requested '${next}' but that transition is not allowed. Using default." >&2
+    fi
+  fi
+
+  # Dynamic default for debug: return to the stage that triggered it
+  if [[ "$current" == "debug" ]]; then
+    local origin_file="${WORK_DIR}/.debug-origin"
+    if [[ -f "$origin_file" ]]; then
+      local origin
+      origin="$(< "$origin_file")"
+      origin="${origin//[[:space:]]/}"
+      if [[ -n "$origin" ]] && validate_transition "debug" "$origin"; then
+        echo "[debug] Returning to origin stage '${origin}'" >&2
+        echo "$origin"
+        return
+      fi
+    fi
+  fi
+
+  echo "${DEFAULT_NEXT[$current]}"
+}
+
+clean_signal_file() {
+  rm -f "${WORK_DIR}/.next-stage"
+}
+
+# ── Loop safety ───────────────────────────────────────────────────
+MAX_STAGE_RUNS=25
+stage_run_count=0
+declare -A STAGE_RUN_COUNTS
+
+# ── Determine starting stage ─────────────────────────────────────
+current_stage="setup"
+if [[ -n "$RESUME_FROM" ]]; then
+  current_stage="$RESUME_FROM"
+fi
+
+# ── Ensure correct branch (needed for resume or wrong checkout) ──
+if [[ "$current_stage" != "setup" ]]; then
+  git fetch origin main 2>/dev/null || true
+  current_branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+  if [[ "$current_branch" != "$BRANCH" ]]; then
+    if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
+      echo "Switching to branch ${BRANCH} (was on ${current_branch:-detached HEAD})."
+      git checkout "$BRANCH"
+    else
+      echo "Error: branch ${BRANCH} does not exist. Cannot resume without it."
+      echo "Run without --resume to start from setup."
+      exit 1
+    fi
+  fi
+  git pull origin "$BRANCH" 2>/dev/null || true
+fi
+
+# ══════════════════════════════════════════════════════════════════
+#  MAIN STATE MACHINE
+# ══════════════════════════════════════════════════════════════════
+while [[ "$current_stage" != "done" ]]; do
+  # Loop safety: global limit
+  stage_run_count=$((stage_run_count + 1))
+  if [[ $stage_run_count -gt $MAX_STAGE_RUNS ]]; then
+    echo ""
+    echo "ERROR: Exceeded maximum stage executions (${MAX_STAGE_RUNS}). Possible infinite loop."
+    echo "Last stage: ${current_stage}"
+    echo "Re-run with --resume <stage> to continue manually."
+    exit 1
+  fi
+
+  # Loop safety: per-stage limit
+  STAGE_RUN_COUNTS[$current_stage]=$(( ${STAGE_RUN_COUNTS[$current_stage]:-0} + 1 ))
+  if [[ ${STAGE_RUN_COUNTS[$current_stage]} -gt 5 ]]; then
+    echo ""
+    echo "WARNING: Stage '${current_stage}' has run ${STAGE_RUN_COUNTS[$current_stage]} times."
+    read -rp "Continue? [y/N] " yn
+    case "$yn" in
+      [Yy]*) ;;
+      *)     echo "Aborting. Re-run with --resume to continue manually."
+             exit 1 ;;
+    esac
+  fi
+
+  # Refresh PATH from login shell to pick up tools installed by prior stages
+  refresh_env
+
+  # Resolve model and effort for this stage
+  stage_model="${STAGE_MODEL[$current_stage]}"
+  stage_effort="$(resolve_stage_effort "$current_stage")"
+
+  # Trivial integration: if main hasn't diverged, handle entirely in bash
+  if [[ "$current_stage" == "integrate" ]]; then
+    git fetch origin main 2>/dev/null || true
+    diverged_commits=$(git log --oneline HEAD..origin/main 2>/dev/null | wc -l)
+    if [[ $diverged_commits -eq 0 ]]; then
+      stage_banner "$current_stage" "${STAGE_DESC[$current_stage]}" "bash (inline)" "n/a"
+
+      # Write trivial Integration.md
+      cat > "${WORK_DIR}/Integration.md" << INTEG_EOF
+# Integration Report: Issue #${ISSUE}
+
+## Summary
+Main has not diverged. No integration needed. Branch is ready for merge.
+INTEG_EOF
+
+      # Commit, push, comment on PR
+      git add "${WORK_DIR}/Integration.md"
+      git commit -m "claude-work(integrate): no integration needed for issue #${ISSUE}"
+      git push
+      gh pr comment "$BRANCH" --body "**Integration:** Main has not diverged. No integration needed. Branch is ready for merge." 2>/dev/null || true
+
+      # Signal done and advance
+      echo "done" > "${WORK_DIR}/.next-stage"
+      previous_stage="$current_stage"
+      current_stage="$(resolve_next_stage "$current_stage")"
+      continue
+    fi
+  fi
+
+  stage_banner "$current_stage" "${STAGE_DESC[$current_stage]}" "$stage_model" "$stage_effort"
+
+  case "$current_stage" in
+    # ── SETUP (inline -- unique logic, not a skill) ────────────
+    setup)
+      # Create or switch to branch
+      git fetch origin main 2>/dev/null || true
+      if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
+        echo "Branch ${BRANCH} exists. Switching to it."
+        git checkout "$BRANCH"
+        git pull origin "$BRANCH" 2>/dev/null || true
+      else
+        echo "Creating branch ${BRANCH} from origin/main."
+        git checkout -b "$BRANCH" origin/main
+      fi
+
+      # Create work directory
+      mkdir -p "$WORK_DIR"
+
+      # Write Issue.md (header uses variable expansion; body appended literally
+      # via printf to prevent command injection from issue text)
+      cat > "${WORK_DIR}/Issue.md" << ISSUE_EOF
+# Issue #${ISSUE}: ${ISSUE_TITLE}
+
+## Source
+- **Repository:** ${GITHUB_REPO}
+- **Issue:** [#${ISSUE}](https://github.com/${GITHUB_REPO}/issues/${ISSUE})
+- **Branch:** \`${BRANCH}\`
+- **Labels:** ${ISSUE_LABELS:-none}
+
+## Issue Text
+
+ISSUE_EOF
+      printf '%s\n' "$ISSUE_BODY" >> "${WORK_DIR}/Issue.md"
+
+      # Commit and push
+      git add "${WORK_DIR}/Issue.md"
+      git commit -m "claude-work: begin issue #${ISSUE} -- ${ISSUE_TITLE}"
+      git push -u origin "$BRANCH"
+
+      # Run environment setup via Claude
+      echo ""
+      echo "Launching Claude to run repo-specific setup..."
+      echo ""
+      claude --model "$stage_model" --effort "$stage_effort" "This is a fresh development environment for working on issue #${ISSUE}. Check this repo's CLAUDE.md, README, and look for setup scripts (scripts/setup.sh, Makefile setup targets, package.json scripts, etc.). Run whatever is needed to initialize the development environment. Report what you did when complete."
+
+      current_stage="research"
+      ;;
+
+    # ── ALL SKILL-BASED STAGES ─────────────────────────────────
+    research|interview|plan|execute|debug|verify|review|integrate)
+      clean_signal_file
+      claude --model "$stage_model" --effort "$stage_effort" "${STAGE_SKILL[$current_stage]} ${ISSUE}"
+
+      doc="${STAGE_DOC[$current_stage]:-}"
+      if [[ -n "$doc" ]]; then
+        check_document "$doc"
+      fi
+
+      previous_stage="$current_stage"
+      current_stage="$(resolve_next_stage "$current_stage")"
+
+      # Save origin when transitioning TO debug
+      if [[ "$current_stage" == "debug" ]]; then
+        echo "$previous_stage" > "${WORK_DIR}/.debug-origin"
+        echo "[debug] Saved origin stage '${previous_stage}'"
+      fi
+      ;;
+
+    *)
+      echo "ERROR: unknown stage '${current_stage}'"
+      exit 1
+      ;;
+  esac
+done
+
+# ══════════════════════════════════════════════════════════════════
+#  COMPLETE
+# ══════════════════════════════════════════════════════════════════
+
+# Mark the PR as ready for review (no longer draft)
+echo "Marking PR as ready for review..."
+gh pr ready "$BRANCH" 2>/dev/null && echo "PR marked as ready." || echo "WARNING: Could not mark PR as ready (may already be non-draft or PR not found)."
+
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo "  Workflow complete for issue #${ISSUE}"
+echo "  Branch: ${BRANCH}"
+echo "  Work:   ${WORK_DIR}/"
+echo ""
+echo "  The PR is ready for final human review and merge."
+echo "  To re-run integration if main has moved:"
+echo "    work-issue ${ISSUE} --resume integrate"
+echo "═══════════════════════════════════════════════════════════"
