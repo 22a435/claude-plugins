@@ -67,9 +67,9 @@ declare -A STAGE_DESC=(
 )
 
 # ── Skill invocations ─────────────────────────────────────────────
-# Plugin skills may be namespaced. Set ISSUE_WORKFLOW_SKILL_PREFIX
-# to "issue-workflow:" if there are name conflicts with other skills.
-_PREFIX="${ISSUE_WORKFLOW_SKILL_PREFIX:-}"
+# Fully qualified names avoid collisions with built-in commands.
+# Override with ISSUE_WORKFLOW_SKILL_PREFIX="" to use short names.
+_PREFIX="${ISSUE_WORKFLOW_SKILL_PREFIX:-issue-workflow:}"
 
 declare -A STAGE_SKILL=(
   [research]="/${_PREFIX}research"
