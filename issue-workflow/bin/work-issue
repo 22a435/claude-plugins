@@ -494,7 +494,7 @@ ISSUE_EOF
       echo ""
       echo "Launching Claude to run repo-specific setup..."
       echo ""
-      claude --model "$stage_model" --effort "$stage_effort" "This is a fresh development environment for working on issue #${ISSUE}. Check this repo's CLAUDE.md, README, and look for setup scripts (scripts/setup.sh, Makefile setup targets, package.json scripts, etc.). Run whatever is needed to initialize the development environment. Report what you did when complete."
+      claude --model "$stage_model" --effort "$stage_effort" "Check this repo's CLAUDE.md, README, and look for setup scripts (scripts/setup.sh, Makefile setup targets, package.json scripts, etc.). Run whatever is needed to initialize the development environment. Report what you did when complete."
 
       current_stage="research"
       ;;
