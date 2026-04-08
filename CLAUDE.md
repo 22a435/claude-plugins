@@ -101,3 +101,11 @@ When modifying the bash orchestrators:
 - `gh` (GitHub CLI) -- authenticated with repo access
 - `claude` (Claude Code CLI) -- authenticated
 - `git` and `jq` in PATH
+
+## Versioning
+
+Both plugins follow [Semantic Versioning](https://semver.org/). When making changes to either plugin:
+
+- **Always bump the patch version** in that plugin's `.claude-plugin/plugin.json`
+- If the change alters the stage machine topology, public interfaces, or orchestrator behavior, it may warrant a minor or major bump -- ask the user if the level of change is unclear
+- Bump only the plugin(s) that were actually modified

@@ -2,7 +2,7 @@
 name: execute
 description: Implement the approved plan using parallel subagents. Documents failures and signals debug when components fail verification. Invoke with /issue-workflow:execute <issue-number>.
 disable-model-invocation: true
-allowed-tools: Read, Grep, Glob, Bash, Agent, Write, Edit, WebSearch, WebFetch
+allowed-tools: Read, Grep, Glob, Bash, Agent, Write, Edit, WebSearch, WebFetch, Skill
 ---
 
 # Execution Phase
@@ -53,14 +53,27 @@ Follow the execution order from the plan. For each batch of parallelizable compo
 
 4. **Handle failures:**
    - If a component's verification check fails, **do not attempt to fix it**
-   - Document the failure in Execute.md (see Step 3) with the exact error output
+   - Document the failure in Execute.md (see Step 4) with the exact error output
    - Continue implementing remaining components that do not depend on the failed one
    - Skip any components that have a dependency on the failed component (note them as blocked)
    - After completing all possible components, commit, push, and signal `debug` as the next stage (see Stage Transition Signal)
 
 5. **Proceed to the next batch** once all components in the current batch pass verification (or are documented as failures).
 
-### Step 3: Write Execute.md
+### Step 3: Simplification Pass
+
+After all components are implemented and verified, run `/simplify` as a cleanup pass on the changed code. **Skip this step entirely if any component failed verification** -- there is no point simplifying code that will change during a debug cycle.
+
+1. Get the list of files changed during execution:
+   ```bash
+   git diff --name-only HEAD
+   ```
+
+2. Invoke `/simplify` to review the changed code for opportunities to improve reuse, quality, and efficiency.
+
+3. Record what `/simplify` changed (if anything) for inclusion in Execute.md.
+
+### Step 4: Write Execute.md
 
 After all possible components are implemented, write the complete execution log to `./claude-work/$0/Execute.md`:
 
@@ -93,6 +106,11 @@ Brief overview: what was implemented, how long it took, any issues encountered.
 - **Blocked components:** <components that depend on this one and were skipped>
 - **Context:** <any relevant observations about why it might be failing>
 
+## Simplification Pass
+What `/simplify` found and changed (or "No changes recommended" or "Skipped -- component failures require debug"):
+- `path/to/file.ts` -- <what was simplified>
+- ...
+
 ## Implementation Notes
 Any observations, deviations from the plan, or things the verify/review stages should be aware of.
 
@@ -100,7 +118,7 @@ Any observations, deviations from the plan, or things the verify/review stages s
 Complete list of all files added, modified, or deleted.
 ```
 
-### Step 4: Commit and Push
+### Step 5: Commit and Push
 
 ```bash
 git add -A
