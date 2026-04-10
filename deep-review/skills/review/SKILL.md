@@ -11,7 +11,7 @@ You are performing the **review** stage of a deep codebase review. This is the c
 
 ## Workflow Context
 
-This skill is one stage of a 9-stage deep review workflow orchestrated by the `deep-review` CLI.
+This skill is one stage of a multi-stage deep review workflow orchestrated by the `deep-review` CLI.
 
 - **Branch:** `claude/review/<session-number>` (created by the orchestrator during setup)
 - **Work directory:** `./claude-reviews/<session-number>/` -- each stage produces one document here
@@ -25,7 +25,7 @@ This skill is one stage of a 9-stage deep review workflow orchestrated by the `d
 ## Context
 - **Session number:** $0 (the review session number passed as your argument)
 - **Work directory:** `./claude-reviews/$0/`
-- **Input documents:** `./claude-reviews/$0/Plan.md` (primary), plus Context.md, Interview.md, UpdateTooling.md
+- **Input documents:** `./claude-reviews/$0/Plan.md` (primary), plus Context.md, Interview.md, UpdateTooling.md, ScAuditResults.md (if exists)
 - **Output documents:** `./claude-reviews/$0/Review.md`, `./claude-reviews/$0/sub-reviews/*.md`
 
 ## Instructions
@@ -39,6 +39,12 @@ Read `Plan.md` in full. This defines:
 - Review priorities
 
 Also read `Context.md` for project context and `UpdateTooling.md` for available tools and their commands.
+
+**If `ScAuditResults.md` exists**, read it in full. This contains sc-auditor's smart contract security findings. When composing the Security sub-reviewer prompt:
+- Include a summary of sc-auditor findings (proved, confirmed, candidate, design_tradeoff counts)
+- Instruct the Security sub-reviewer to **validate and cross-reference** sc-auditor findings, not re-discover them
+- Direct the Security sub-reviewer to focus on areas sc-auditor did NOT cover: non-Solidity code in the repo, deployment scripts, CI/CD security, off-chain components, infrastructure
+- For each sc-auditor candidate finding, ask the Security sub-reviewer to assess whether it agrees or disagrees with the classification
 
 ### Step 2: Run Automated Tools
 
@@ -179,6 +185,15 @@ Same format, can be more concise.
 
 ## Informational
 Brief list of observations that don't require action.
+
+## SC-Auditor Findings
+(Include this section ONLY if ScAuditResults.md exists)
+Incorporate sc-auditor findings into the review, organized by proof status:
+- **Proved vulnerabilities:** <list with severity, title, proof type -- these are confirmed and should be top remediation priority>
+- **Confirmed findings:** <list verified by adversarial protocol>
+- **Candidate findings:** <list with Security sub-reviewer's assessment of each>
+- **Design tradeoffs:** <list -- note whether documentation adequately covers the risk>
+Note which sc-auditor findings cross-cut with other sub-reviewer domains (e.g., an architecture issue that enables a security vulnerability).
 
 ## Cross-Cutting Concerns
 Findings that span multiple sub-review domains. For example:

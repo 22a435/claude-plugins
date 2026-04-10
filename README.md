@@ -22,7 +22,7 @@ Comprehensive codebase review with up to 10 parallel sub-reviewers and automated
 deep-review
 ```
 
-Stages: setup → context-building → interview ↔ update-tooling → plan → review → remediation-plan → remediation → done
+Stages: setup → context-building → interview ↔ update-tooling → [plan-sc-audit → run-sc-audit] → plan → review → remediation-plan → remediation → verify → integrate → done
 
 ## Installation
 

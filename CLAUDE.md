@@ -25,7 +25,8 @@ Comprehensive codebase review with up to 10 parallel sub-reviewers and automated
 - CLI: `deep-review [--effort high|max] [--model <model>] [--resume <stage>] [--session <N>]`
 - Branch: `claude/review/<session-number>`
 - Work dir: `./claude-reviews/<session-number>/`
-- Stages: `setup -> context-building -> interview <-> update-tooling -> plan -> review -> remediation-plan -> remediation -> verify -> integrate -> done`
+- Stages: `setup -> context-building -> interview <-> update-tooling -> [plan-sc-audit -> run-sc-audit] -> plan -> review -> remediation-plan -> remediation -> verify -> integrate -> done`
+- Conditional stages: `plan-sc-audit` and `run-sc-audit` only run for Solidity projects with sc-auditor approved during interview
 
 ## Repository Structure
 
@@ -42,7 +43,7 @@ deep-review/
   bin/deep-review                 # Bash orchestrator (state machine)
   hooks/hooks.json
   hooks/check-git-branch.sh
-  skills/<stage>/SKILL.md
+  skills/<stage>/SKILL.md         # Includes plan-sc-audit/ and run-sc-audit/ for sc-auditor integration
 ```
 
 ## Architecture

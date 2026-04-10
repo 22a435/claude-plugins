@@ -26,15 +26,17 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 PLUGIN_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # ── Valid stages (for --resume validation) ────────────────────────
-readonly ALL_STAGES=(setup context-building interview update-tooling plan review remediation-plan remediation verify integrate)
+readonly ALL_STAGES=(setup context-building interview update-tooling plan-sc-audit run-sc-audit plan review remediation-plan remediation verify integrate)
 
 # ── Transition rules ──────────────────────────────────────────────
 # Each stage maps to its space-delimited list of allowed next stages.
 declare -A ALLOWED_TRANSITIONS=(
   [setup]="context-building"
   [context-building]="interview"
-  [interview]="plan update-tooling interview"
+  [interview]="plan update-tooling interview plan-sc-audit"
   [update-tooling]="interview"
+  [plan-sc-audit]="run-sc-audit interview plan"
+  [run-sc-audit]="plan"
   [plan]="review interview update-tooling plan"
   [review]="remediation-plan review"
   [remediation-plan]="remediation interview update-tooling remediation-plan"
@@ -48,6 +50,8 @@ declare -A DEFAULT_NEXT=(
   [context-building]="interview"
   [interview]="plan"
   [update-tooling]="interview"
+  [plan-sc-audit]="run-sc-audit"
+  [run-sc-audit]="plan"
   [plan]="review"
   [review]="remediation-plan"
   [remediation-plan]="remediation"
@@ -61,6 +65,8 @@ declare -A STAGE_DESC=(
   [context-building]="Project context, tool discovery, and recommendations"
   [interview]="Resolve questions, approve tools, set review priorities"
   [update-tooling]="Install approved tools and persist to repo"
+  [plan-sc-audit]="Configure sc-auditor for smart contract analysis"
+  [run-sc-audit]="Execute sc-auditor smart contract security audit"
   [plan]="Draft and approve review plan"
   [review]="Deep review with parallel sub-reviewers"
   [remediation-plan]="Draft and approve remediation plan"
@@ -78,6 +84,8 @@ declare -A STAGE_SKILL=(
   [context-building]="/${_PREFIX}context-building"
   [interview]="/${_PREFIX}interview"
   [update-tooling]="/${_PREFIX}update-tooling"
+  [plan-sc-audit]="/${_PREFIX}plan-sc-audit"
+  [run-sc-audit]="/${_PREFIX}run-sc-audit"
   [plan]="/${_PREFIX}plan"
   [review]="/${_PREFIX}review"
   [remediation-plan]="/${_PREFIX}remediation-plan"
@@ -90,6 +98,8 @@ declare -A STAGE_DOC=(
   [context-building]="Context.md"
   [interview]="Interview.md"
   [update-tooling]="UpdateTooling.md"
+  [plan-sc-audit]="ScAuditPlan.md"
+  [run-sc-audit]="ScAuditResults.md"
   [plan]="Plan.md"
   [review]="Review.md"
   [remediation-plan]="Remediation-Plan.md"
@@ -107,6 +117,8 @@ declare -A STAGE_MODEL=(
   [context-building]="${DEEP_REVIEW_MODEL_CONTEXT_BUILDING:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
   [interview]="${DEEP_REVIEW_MODEL_INTERVIEW:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
   [update-tooling]="${DEEP_REVIEW_MODEL_UPDATE_TOOLING:-${DEEP_REVIEW_MODEL:-sonnet[1m]}}"
+  [plan-sc-audit]="${DEEP_REVIEW_MODEL_PLAN_SC_AUDIT:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
+  [run-sc-audit]="${DEEP_REVIEW_MODEL_RUN_SC_AUDIT:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
   [plan]="${DEEP_REVIEW_MODEL_PLAN:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
   [review]="${DEEP_REVIEW_MODEL_REVIEW:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
   [remediation-plan]="${DEEP_REVIEW_MODEL_REMEDIATION_PLAN:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
@@ -121,6 +133,8 @@ declare -A STAGE_EFFORT=(
   [context-building]="${DEEP_REVIEW_EFFORT_CONTEXT_BUILDING:-high}"
   [interview]="${DEEP_REVIEW_EFFORT_INTERVIEW:-high}"
   [update-tooling]="${DEEP_REVIEW_EFFORT_UPDATE_TOOLING:-high}"
+  [plan-sc-audit]="${DEEP_REVIEW_EFFORT_PLAN_SC_AUDIT:-high}"
+  [run-sc-audit]="${DEEP_REVIEW_EFFORT_RUN_SC_AUDIT:-max}"
   [plan]="${DEEP_REVIEW_EFFORT_PLAN:-high}"
   [review]="${DEEP_REVIEW_EFFORT_REVIEW:-max}"
   [remediation-plan]="${DEEP_REVIEW_EFFORT_REMEDIATION_PLAN:-high}"
@@ -156,6 +170,8 @@ Stages:
   context-building   Analyze project, discover tools, recommend additions
   interview          Resolve questions, approve tools, set review priorities
   update-tooling     Install approved tools, persist to repo setup scripts
+  plan-sc-audit      Configure sc-auditor for smart contract analysis (conditional)
+  run-sc-audit       Execute sc-auditor security audit (conditional)
   plan               Draft and approve comprehensive review plan
   review             Deep review with up to 10 parallel sub-reviewers
   remediation-plan   Draft and approve remediation plan from findings
@@ -166,6 +182,8 @@ Stages:
 Stage transitions:
   Context-building always advances to interview.
   Interview, update-tooling, and plan can loop between each other.
+  Interview can signal plan-sc-audit for Solidity projects with sc-auditor approved.
+  plan-sc-audit advances to run-sc-audit; run-sc-audit advances to plan.
   Review can self-loop for deeper investigation.
   Remediation-plan can loop back for more tools.
   Verify loops to remediation if gaps found; advances to integrate if all pass.
@@ -491,7 +509,7 @@ INTEG_EOF
       ;;
 
     # ── ALL SKILL-BASED STAGES ─────────────────────────────────
-    context-building|interview|update-tooling|plan|review|remediation-plan|remediation|verify)
+    context-building|interview|update-tooling|plan-sc-audit|run-sc-audit|plan|review|remediation-plan|remediation|verify)
       clean_signal_file
       claude --model "$stage_model" --effort "$stage_effort" "${STAGE_SKILL[$current_stage]} ${SESSION}"
 
