@@ -37,9 +37,15 @@ Read `./claude-reviews/$0/ScAuditPlan.md` to determine:
 - Configuration parameters
 - Which tools are available
 
-### Step 2: Invoke sc-auditor
+### Step 2: Set SC_AUDITOR_CONFIG and Invoke sc-auditor
 
-Run the sc-auditor security audit by invoking its skill command. Use the Skill tool:
+Ensure the `SC_AUDITOR_CONFIG` environment variable points to the config file so sc-auditor picks it up:
+
+```bash
+export SC_AUDITOR_CONFIG="$(git rev-parse --show-toplevel)/.sc-auditor.config.json"
+```
+
+Then run the sc-auditor security audit by invoking its skill command. Use the Skill tool:
 
 ```
 Skill({ skill: "security-auditor", args: "<target-directory>" })

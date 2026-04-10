@@ -257,6 +257,9 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 }
 cd "$REPO_ROOT"
 
+# ── SC-auditor config path (consumed by sc-auditor if auditor stages run) ──
+export SC_AUDITOR_CONFIG="${REPO_ROOT}/.sc-auditor.config.json"
+
 # ── Session numbering ────────────────────────────────────────────
 REVIEW_BASE="${REPO_ROOT}/claude-reviews"
 mkdir -p "$REVIEW_BASE"
