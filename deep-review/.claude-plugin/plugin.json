@@ -1,6 +1,6 @@
 {
   "name": "deep-review",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Deep codebase review with optional sc-auditor smart contract security integration: context building, interview, tooling, sc-audit planning, sc-audit execution, planning, parallel sub-reviews, remediation planning, remediation, verification, and integration",
   "author": { "name": "22a435" },
   "repository": "https://github.com/22a435/claude-plugins",
