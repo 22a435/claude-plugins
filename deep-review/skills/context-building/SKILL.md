@@ -11,7 +11,7 @@ You are performing the **context-building** stage of a deep codebase review. You
 
 ## Workflow Context
 
-This skill is one stage of a 9-stage deep review workflow orchestrated by the `deep-review` CLI.
+This skill is one stage of a multi-stage deep review workflow orchestrated by the `deep-review` CLI.
 
 - **Branch:** `claude/review/<session-number>` (created by the orchestrator during setup)
 - **Work directory:** `./claude-reviews/<session-number>/` -- each stage produces one document here
@@ -44,6 +44,7 @@ Launch multiple discovery agents simultaneously. All agents use `model: "sonnet"
 - Map module organization, entry points, and key abstractions
 - Identify build tools, bundlers, and compilation steps
 - Look at the top-level directory layout and how code is organized
+- **Solidity detection:** Check for `.sol` files, `foundry.toml`, `hardhat.config.js/ts`, `truffle-config.js`, `remappings.txt`. If found, note: number of contracts, which framework (Foundry/Hardhat/Truffle), whether cross-contract interactions exist (imports between contract files), DeFi patterns (ERC20/ERC721/ERC4626, oracles, AMMs, flash loans), and proxy/upgradeable patterns
 
 **Documentation Reader** -- launch an Explore agent to:
 - Read CLAUDE.md (all of them -- root and subdirectory), README.md, CONTRIBUTING.md
@@ -96,6 +97,7 @@ Launch a web research agent (`model: "sonnet"`) to recommend review tools based 
 - **Rust:** clippy, cargo-audit, cargo-deny, cargo-udeps
 - **Java/Kotlin:** spotbugs, checkstyle, pmd, dependency-check
 - **Ruby:** rubocop, brakeman, bundler-audit
+- **Solidity:** sc-auditor (comprehensive smart contract audit with Map-Hunt-Attack methodology, Devil's Advocate falsification, proof generation via Echidna/Halmos/Foundry, Solodit cross-referencing), slither (static analysis), aderyn (static analysis)
 - **General:** semgrep, trivy, gitleaks, tokei/cloc (line counts), jscpd (copy-paste detection)
 - **Documentation:** markdownlint, alex (inclusive language)
 
@@ -142,6 +144,16 @@ Test frameworks, coverage tooling, test patterns, CI integration. Current test h
 
 ## Documentation Assessment
 What docs exist, preliminary quality/completeness rating. CLAUDE.md files found and their state.
+
+## Solidity / Smart Contract Context
+(Include this section ONLY if Solidity files were detected)
+- **Contract count:** <N> .sol files
+- **Framework:** Foundry / Hardhat / Truffle / none
+- **Cross-contract interactions:** yes/no (how many import chains)
+- **DeFi patterns:** ERC20, ERC721, ERC4626, oracles, AMMs, flash loans, etc.
+- **Proxy/upgradeable:** yes/no (which pattern)
+- **Compiler version(s):** <from config files>
+- **sc-auditor recommended:** yes -- provides specialized smart contract security analysis with Map-Hunt-Attack methodology, 6-dimensional Devil's Advocate falsification, and proof generation via Echidna/Halmos/Foundry
 
 ## Derived Interfaces
 SDKs, APIs, RPC definitions, MCP servers, WebUI components detected. How they relate to core code.

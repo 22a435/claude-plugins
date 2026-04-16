@@ -1,6 +1,6 @@
 # deep-review
 
-A Claude Code plugin that orchestrates comprehensive codebase reviews through a 9-stage workflow with up to 10 parallel sub-reviewers, automated remediation, verification, and integration.
+A Claude Code plugin that orchestrates comprehensive codebase reviews through a multi-stage workflow with up to 10 parallel sub-reviewers, optional smart contract security auditing via sc-auditor, automated remediation, verification, and integration.
 
 ## How It Works
 
@@ -54,8 +54,10 @@ deep-review --model opus[1m]
 ## Stages
 
 ```
-setup -> context-building -> interview <-> update-tooling -> plan -> review -> remediation-plan -> remediation -> verify -> integrate -> done
+setup -> context-building -> interview <-> update-tooling -> [plan-sc-audit -> run-sc-audit] -> plan -> review -> remediation-plan -> remediation -> verify -> integrate -> done
 ```
+
+The `plan-sc-audit` and `run-sc-audit` stages are conditional -- they only run for Solidity projects when sc-auditor is approved during the interview stage.
 
 | Stage | Model (default) | Purpose |
 |-------|----------------|---------|
@@ -63,6 +65,8 @@ setup -> context-building -> interview <-> update-tooling -> plan -> review -> r
 | **context-building** | opus[1m] | Analyze project structure, tech stack, discover and recommend review tools |
 | **interview** | opus[1m] | Resolve ambiguities, approve tools, set review priorities |
 | **update-tooling** | sonnet[1m] | Install approved tools, persist to repo setup scripts |
+| **plan-sc-audit** | opus[1m] | Configure sc-auditor for smart contract analysis (conditional) |
+| **run-sc-audit** | opus[1m] | Execute sc-auditor security audit (conditional) |
 | **plan** | opus[1m] | Draft comprehensive review plan; requires user approval |
 | **review** | opus[1m] | Deep review with up to 10 parallel sub-reviewers |
 | **remediation-plan** | opus[1m] | Prioritize fixes and issues; requires user approval |
@@ -72,7 +76,7 @@ setup -> context-building -> interview <-> update-tooling -> plan -> review -> r
 
 ### State Machine
 
-Interview, update-tooling, and plan can loop between each other (for adding tools or adjusting priorities). The review stage can self-loop for deeper investigation. Remediation-plan can loop back to interview/update-tooling if more tools are needed. Verify loops back to remediation if gaps are found; otherwise advances to integrate. Integrate handles rebasing onto main; if a rebase occurs it loops back to verify to confirm remediations survived.
+Interview, update-tooling, and plan can loop between each other (for adding tools or adjusting priorities). For Solidity projects, interview can signal `plan-sc-audit`, which configures sc-auditor and advances to `run-sc-audit`, then to `plan`. The review stage can self-loop for deeper investigation. Remediation-plan can loop back to interview/update-tooling if more tools are needed. Verify loops back to remediation if gaps are found; otherwise advances to integrate. Integrate handles rebasing onto main; if a rebase occurs it loops back to verify to confirm remediations survived.
 
 ### Sub-Reviewers (Review Stage)
 
@@ -112,6 +116,8 @@ Each review session gets `./claude-reviews/<session-number>/`:
 | context-building | `Context.md` |
 | interview | `Interview.md` |
 | update-tooling | `UpdateTooling.md` |
+| plan-sc-audit | `ScAuditPlan.md` + `.sc-auditor.config.json` (repo root) |
+| run-sc-audit | `ScAuditResults.md` + `sc-audit/` (report dir) |
 | plan | `Plan.md` |
 | review | `Review.md` + `sub-reviews/*.md` |
 | remediation-plan | `Remediation-Plan.md` |
@@ -126,6 +132,7 @@ Tool output is captured in `sub-reviews/.tool-output/`.
 - Each stage may **read** any prior document but only **write** to its own
 - Re-triggered stages **append** new sections
 - Only **remediation** and **update-tooling** may edit source code
+- **plan-sc-audit** also writes `.sc-auditor.config.json` to the repo root
 
 ## Commits
 

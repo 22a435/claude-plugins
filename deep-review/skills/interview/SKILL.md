@@ -11,7 +11,7 @@ You are performing the **interview** stage of a deep codebase review. Your job i
 
 ## Workflow Context
 
-This skill is one stage of a 9-stage deep review workflow orchestrated by the `deep-review` CLI.
+This skill is one stage of a multi-stage deep review workflow orchestrated by the `deep-review` CLI.
 
 - **Branch:** `claude/review/<session-number>` (created by the orchestrator during setup)
 - **Work directory:** `./claude-reviews/<session-number>/` -- each stage produces one document here
@@ -31,7 +31,42 @@ This skill is one stage of a 9-stage deep review workflow orchestrated by the `d
 
 Read `Context.md` in full. If this is a re-trigger, also read the existing `Interview.md` and `UpdateTooling.md` (if it exists) to understand what has already been decided and what tools were installed.
 
-### Step 2: Present Tool Recommendations
+### Step 2: SC-Auditor Recommendation (Solidity Projects Only)
+
+If Context.md contains a "Solidity / Smart Contract Context" section (indicating Solidity files were detected), **strongly recommend sc-auditor** before presenting other tools:
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "This project contains Solidity smart contracts. sc-auditor provides specialized security analysis with parallel vulnerability hunt lanes, adversarial falsification (Devil's Advocate protocol), and proof generation. It also uses Slither, Aderyn, Echidna, Halmos, and Foundry as subtools, and cross-references findings against real-world exploits via Solodit. Enable sc-auditor for this review?",
+    header: "SC-Audit",
+    options: [
+      { label: "Approve (Recommended)", description: "Run sc-auditor as a dedicated audit stage before the main review. Requires Node.js 22+." },
+      { label: "Reject", description: "Skip sc-auditor -- use only the standard review pipeline for security" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+If approved, ask about Solodit API key:
+```
+AskUserQuestion({
+  questions: [{
+    question: "sc-auditor can cross-reference findings against real-world confirmed exploits via the Solodit API. Do you have a Solodit API key available?",
+    header: "Solodit",
+    options: [
+      { label: "Yes, it's set", description: "SOLODIT_API_KEY is in my environment or .env file" },
+      { label: "No", description: "Skip Solodit cross-referencing -- audit still works without it" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+Record the sc-auditor decision in Interview.md under a dedicated section. If approved, this will trigger the `plan-sc-audit` stage after interview completes.
+
+### Step 3: Present Tool Recommendations
 
 Use `AskUserQuestion` to present recommended tools from Context.md for approval. Group tools by category.
 
@@ -46,7 +81,7 @@ Call `AskUserQuestion` with one question per tool in that category (up to 4 per 
   - `label`: "Defer", `description`: "Decide later, after seeing other results"
 - `multiSelect: false` (these are mutually exclusive per tool)
 
-**If no tools were recommended**, skip to Step 3.
+**If no tools were recommended**, skip to Step 4.
 
 **After all tool questions are answered**, ask about additional tools:
 ```
@@ -67,7 +102,7 @@ If the user selects "Yes" and provides tool names via "Other", record them as us
 
 **Handle batch responses:** If the user's free-text "Other" response on any tool question says "approve all" or "reject all", apply that decision to all remaining unanswered tool questions without asking further.
 
-### Step 3: Gather Review Priorities
+### Step 4: Gather Review Priorities
 
 Use `AskUserQuestion` to gather review priorities. Split into two calls (2 questions each) to keep each focused:
 
@@ -113,7 +148,7 @@ AskUserQuestion({
 })
 ```
 
-### Step 4: Ask About Derived Interfaces
+### Step 5: Ask About Derived Interfaces
 
 If Context.md detected derived interfaces, use `AskUserQuestion` to confirm them:
 
@@ -141,7 +176,7 @@ AskUserQuestion({
 
 If Context.md detected no derived interfaces, skip this step entirely.
 
-### Step 5: Resolve Open Questions
+### Step 6: Resolve Open Questions
 
 Use `AskUserQuestion` to resolve open questions from Context.md.
 
@@ -159,12 +194,18 @@ Use `AskUserQuestion` to resolve open questions from Context.md.
 
 If Context.md has no open questions, skip this step.
 
-### Step 6: Write Interview.md
+### Step 7: Write Interview.md
 
 Write `./claude-reviews/$0/Interview.md`:
 
 ```
 # Interview Record: Review Session #<N>
+
+## SC-Auditor Decision
+(Include only if Solidity detected)
+- **Approved:** yes/no
+- **Solodit API:** available/not available
+- **Subtools to install:** sc-auditor, slither, aderyn, foundry, echidna, medusa, halmos (as applicable)
 
 ## Approved Tools
 | Tool | Category | Persist to Repo |
@@ -199,7 +240,7 @@ All other decisions from the interview, grouped by topic.
 Any other context the user provided.
 ```
 
-### Step 7: Commit, Push, and Comment
+### Step 8: Commit, Push, and Comment
 
 ```bash
 git add ./claude-reviews/$0/Interview.md
@@ -227,19 +268,29 @@ When running under the `deep-review` orchestrator, you can request a transition 
   ```bash
   echo "update-tooling" > ./claude-reviews/$0/.next-stage
   ```
+- `plan-sc-audit` -- if sc-auditor was approved, all tools are already installed (no update-tooling needed), and you're ready to configure the audit:
+  ```bash
+  echo "plan-sc-audit" > ./claude-reviews/$0/.next-stage
+  ```
+  Note: if sc-auditor was approved AND other tools also need installing, signal `update-tooling` first. After update-tooling installs everything and returns to interview, signal `plan-sc-audit` on the next pass.
 - `interview` -- if you need another round of questions (should be rare):
   ```bash
   echo "interview" > ./claude-reviews/$0/.next-stage
   ```
-- Default (advance to plan) is correct when no tools need installing.
+- Default (advance to plan) is correct when no tools need installing and sc-auditor was NOT approved.
 
 ## Re-trigger Behavior
 
 If re-triggered and `./claude-reviews/$0/Interview.md` already exists:
 
 1. Read the existing Interview.md and UpdateTooling.md (if exists)
-2. Identify what has changed or what new questions arose
-3. Append a new section:
+2. **If the existing Interview.md shows sc-auditor was approved** (in the "SC-Auditor Decision" section) **and this re-trigger is after update-tooling installed the tools**, signal `plan-sc-audit` as the next stage:
+   ```bash
+   echo "plan-sc-audit" > ./claude-reviews/$0/.next-stage
+   ```
+   You may skip the full re-interview in this case -- just append a brief note and signal.
+3. Otherwise, identify what has changed or what new questions arose
+4. Append a new section:
 
 ```
 ---

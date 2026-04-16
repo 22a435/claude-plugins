@@ -11,7 +11,7 @@ You are performing the **planning** stage of a deep codebase review. Your job is
 
 ## Workflow Context
 
-This skill is one stage of a 9-stage deep review workflow orchestrated by the `deep-review` CLI.
+This skill is one stage of a multi-stage deep review workflow orchestrated by the `deep-review` CLI.
 
 - **Branch:** `claude/review/<session-number>` (created by the orchestrator during setup)
 - **Work directory:** `./claude-reviews/<session-number>/` -- each stage produces one document here
@@ -24,7 +24,7 @@ This skill is one stage of a 9-stage deep review workflow orchestrated by the `d
 ## Context
 - **Session number:** $0 (the review session number passed as your argument)
 - **Work directory:** `./claude-reviews/$0/`
-- **Input documents:** `./claude-reviews/$0/Context.md`, `./claude-reviews/$0/Interview.md`, `./claude-reviews/$0/UpdateTooling.md` (if exists)
+- **Input documents:** `./claude-reviews/$0/Context.md`, `./claude-reviews/$0/Interview.md`, `./claude-reviews/$0/UpdateTooling.md` (if exists), `./claude-reviews/$0/ScAuditResults.md` (if exists -- from sc-auditor stage)
 - **Output document:** `./claude-reviews/$0/Plan.md`
 
 ## Instructions
@@ -37,6 +37,13 @@ Read `Context.md`, `Interview.md`, and `UpdateTooling.md` (if it exists) in full
 - What the user's review priorities are
 - What is out of scope
 - What derived interfaces to include
+
+**If `ScAuditResults.md` exists** (from the sc-auditor stage), read it in full. This contains specialized smart contract security findings with proof status (proved/confirmed/candidate/design_tradeoff/discarded). These findings should heavily inform the plan:
+- The Security sub-reviewer should **validate and expand** sc-auditor findings, not re-discover them
+- The Security sub-reviewer should focus on areas sc-auditor did NOT cover (non-Solidity code, deployment scripts, off-chain components, infrastructure)
+- The Architecture sub-reviewer should consider structural issues from sc-auditor's system map
+- sc-auditor's proved/confirmed findings should be highlighted in the plan as high-priority remediation targets
+- sc-auditor's design_tradeoff findings should be flagged for the Documentation sub-reviewer
 
 If needed, use Explore agents with `model: "sonnet"` to do targeted codebase lookups to inform the plan.
 
@@ -113,6 +120,15 @@ What is being reviewed, the overall approach, and expected depth.
 - **Tools:** <list>
 - **Scope:** <scope>
 - **Output:** sub-reviews/simplification.md
+
+## SC-Auditor Findings Integration
+(Include this section ONLY if ScAuditResults.md exists)
+How sc-auditor findings are incorporated:
+- **Proved/Confirmed findings:** <count> -- these are validated vulnerabilities that should be prioritized for remediation
+- **Candidate findings:** <count> -- plausible but unproven; Security sub-reviewer should assess these
+- **Design tradeoffs:** <count> -- Documentation sub-reviewer should verify these are properly documented
+- **Security sub-reviewer scope adjustment:** Focus on non-Solidity security (off-chain, deployment, infrastructure) and validation/expansion of sc-auditor findings rather than re-discovery
+- **Areas sc-auditor did not cover:** <list of non-Solidity code areas>
 
 ## Automated Tool Runs
 Which tools will be run before sub-reviewers launch, and how their output feeds into sub-reviews:

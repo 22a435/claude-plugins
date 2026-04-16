@@ -88,7 +88,7 @@ All configuration is via environment variables.
 | `ISSUE_WORKFLOW_MODEL_<STAGE>` | Override model for one stage | per-stage default |
 | `ISSUE_WORKFLOW_EFFORT_<STAGE>` | Override effort for one stage | per-stage default |
 | `ISSUE_WORKFLOW_SKILL_PREFIX` | Skill name prefix for conflicts | `issue-workflow:` |
-| `CLAUDE_CODE_EFFORT_LEVEL` | Global effort override | `high` |
+| `CLAUDE_CODE_EFFORT_LEVEL` | Global effort override | `xhigh` |
 
 ## Work Directory
 

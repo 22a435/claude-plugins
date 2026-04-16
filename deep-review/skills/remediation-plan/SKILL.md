@@ -11,7 +11,7 @@ You are performing the **remediation-plan** stage of a deep codebase review. You
 
 ## Workflow Context
 
-This skill is one stage of a 9-stage deep review workflow orchestrated by the `deep-review` CLI.
+This skill is one stage of a multi-stage deep review workflow orchestrated by the `deep-review` CLI.
 
 - **Branch:** `claude/review/<session-number>` (created by the orchestrator during setup)
 - **Work directory:** `./claude-reviews/<session-number>/` -- each stage produces one document here
@@ -124,53 +124,131 @@ git commit -m "claude-review(remediation-plan): draft remediation plan [session 
 git push
 ```
 
-### Step 5: Present the Plan to the User
+### Step 5: Present Full Plan Overview
 
-Present the full remediation plan to the user as text. Then use the `AskUserQuestion` tool to collect their decision:
+Present the complete remediation plan to the user organized by category. For each category (Fix Now, Create Issue, Skip), list every item with its title, severity, and a one-line description. The goal is to give the user the full picture -- including any overlaps or intersections between items -- before diving into per-item decisions.
 
+Example format:
+
+```
+## Fix Now (N items)
+1. <title> — <severity> — <one-line description>
+2. ...
+
+## Create Issue (N items)
+1. <title> — <severity> — <one-line description>
+2. ...
+
+## Skip (N items)
+1. <title> — <severity> — <one-line description>
+2. ...
+```
+
+After presenting the overview, proceed directly to per-item review.
+
+### Step 6: Sequential Per-Item Review
+
+Walk through every item across all three categories (Fix Now first, then Create Issue, then Skip) one at a time. For each item:
+
+1. **Present the item's full details** -- title, source finding, severity, files to change, change description, verification, risk, and dependencies.
+
+2. **Call `AskUserQuestion`** with options contextual to the item's current category:
+
+**If item is currently in "Fix Now":**
 ```
 AskUserQuestion({
   questions: [{
-    question: "How would you like to proceed with this remediation plan?",
-    header: "Remed Plan",
+    question: "<item title>\n<brief item summary>",
+    header: "Fix Now — Item N of M",
     options: [
-      { label: "Approve", description: "Plan looks good -- proceed to remediation" },
-      { label: "Move items", description: "Move findings between Fix Now / Create Issue / Skip categories" },
-      { label: "Edit items", description: "Add or remove specific items from the plan" },
-      { label: "Need more tools", description: "Escalate to interview or update-tooling for additional tools" }
+      { label: "Approve", description: "Keep in Fix Now" },
+      { label: "Move to Create Issue", description: "Defer to a GitHub issue instead" },
+      { label: "Remove", description: "Drop from plan entirely" },
+      { label: "Edit", description: "Modify this item (provide details via Other)" }
     ],
     multiSelect: false
   }]
 })
 ```
 
-The user can also select "Other" to provide free-text feedback.
+**If item is currently in "Create Issue":**
+```
+AskUserQuestion({
+  questions: [{
+    question: "<item title>\n<brief item summary>",
+    header: "Create Issue — Item N of M",
+    options: [
+      { label: "Approve", description: "Keep as Create Issue" },
+      { label: "Move to Fix Now", description: "Fix immediately in this session" },
+      { label: "Remove", description: "Drop from plan entirely" },
+      { label: "Edit", description: "Modify this item (provide details via Other)" }
+    ],
+    multiSelect: false
+  }]
+})
+```
 
-### Step 6: Handle Feedback
+**If item is currently in "Skip":**
+```
+AskUserQuestion({
+  questions: [{
+    question: "<item title>\n<brief item summary>",
+    header: "Skip — Item N of M",
+    options: [
+      { label: "Approve", description: "Keep skipped" },
+      { label: "Move to Fix Now", description: "Fix immediately in this session" },
+      { label: "Move to Create Issue", description: "Defer to a GitHub issue" },
+      { label: "Edit", description: "Modify this item (provide details via Other)" }
+    ],
+    multiSelect: false
+  }]
+})
+```
 
-Based on the user's `AskUserQuestion` response:
+3. **Apply the user's decision:**
+   - **Approve**: No change. Move to the next item.
+   - **Move to \<category\>**: Recategorize the item to the target bucket. Move to the next item.
+   - **Remove**: Delete the item from the plan entirely. Move to the next item.
+   - **Edit** (or "Other" with free-text instructions): Apply the user's edits to the item, present the updated item, and re-ask for approval on that same item (loop until the user selects Approve, Move, or Remove).
 
-**"Approve"** -- Proceed to Step 7 (Post PR Comment).
+### Step 7: Finalize Plan
 
-**"Move items"** or **"Edit items"** (or "Other" with specific instructions):
-- Edit `Remediation-Plan.md` in place with the requested changes
-- Commit and push:
-  ```bash
-  git add ./claude-reviews/$0/Remediation-Plan.md
-  git commit -m "claude-review(remediation-plan): revise plan -- <summary> [session #$0]"
-  git push
-  ```
-- Present the updated plan and return to Step 5 (re-invoke `AskUserQuestion` for approval)
+After all items have been individually reviewed:
 
-**"Need more tools"** (or "Other" requesting tools):
-- Write the signal file:
+1. Update `Remediation-Plan.md` with all moves, removals, and edits applied.
+2. Commit and push:
+   ```bash
+   git add ./claude-reviews/$0/Remediation-Plan.md
+   git commit -m "claude-review(remediation-plan): revise plan per item review [session #$0]"
+   git push
+   ```
+3. Present a final summary showing the updated counts per category. Then call `AskUserQuestion`:
+   ```
+   AskUserQuestion({
+     questions: [{
+       question: "Final plan: <N> fix now, <N> create issue, <N> skip. Ready to proceed?",
+       header: "Final Plan",
+       options: [
+         { label: "Approve", description: "Proceed to remediation" },
+         { label: "Restart review", description: "Walk through all items again from the beginning" },
+         { label: "Need more tools", description: "Escalate to interview or update-tooling for additional tools" }
+       ],
+       multiSelect: false
+     }]
+   })
+   ```
+
+Based on the response:
+- **Approve**: Proceed to Step 8 (Post PR Comment).
+- **Restart review**: Return to Step 5 (present overview, then walk through items again).
+- **Need more tools** (or "Other" requesting tools): Write the signal file:
   ```bash
   echo "interview" > ./claude-reviews/$0/.next-stage
   # or
   echo "update-tooling" > ./claude-reviews/$0/.next-stage
   ```
 
-### Step 7: Post PR Comment (after approval)
+### Step 8: Post PR Comment (after approval)
 
 ```bash
 gh pr comment "claude/review/$0" --body "**Remediation Plan Approved**
@@ -200,21 +278,6 @@ Proceeding to remediation."
 If re-triggered and `Remediation-Plan.md` already exists:
 
 1. Read the existing plan
-2. Present it to the user, then use `AskUserQuestion` to ask how to proceed:
-   ```
-   AskUserQuestion({
-     questions: [{
-       question: "This remediation plan already exists from a previous run. How would you like to proceed?",
-       header: "Prior Plan",
-       options: [
-         { label: "Approve", description: "Plan looks good as-is -- proceed to remediation" },
-         { label: "Move items", description: "Move findings between Fix Now / Create Issue / Skip categories" },
-         { label: "Edit items", description: "Add or remove specific items from the plan" },
-         { label: "Need more tools", description: "Escalate to interview or update-tooling for additional tools" }
-       ],
-       multiSelect: false
-     }]
-   })
-   ```
-3. If edits requested: edit in place (git history serves as audit trail)
-4. Commit, push, and return to Step 5 to re-invoke `AskUserQuestion` for approval
+2. Present the full plan overview (Step 5)
+3. Walk through each item sequentially for per-item approval (Step 6)
+4. Finalize, commit, push, and present the final summary for approval (Step 7)

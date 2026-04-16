@@ -11,7 +11,7 @@ You are performing the **update-tooling** stage of a deep codebase review. Your 
 
 ## Workflow Context
 
-This skill is one stage of a 9-stage deep review workflow orchestrated by the `deep-review` CLI.
+This skill is one stage of a multi-stage deep review workflow orchestrated by the `deep-review` CLI.
 
 - **Branch:** `claude/review/<session-number>` (created by the orchestrator during setup)
 - **Work directory:** `./claude-reviews/<session-number>/` -- each stage produces one document here
@@ -38,6 +38,51 @@ Read `Interview.md` for the list of approved tools, including:
 Also read `Context.md` for the install/run commands and existing tooling already in the repo.
 
 If `UpdateTooling.md` already exists (re-trigger), read it to see what was previously installed.
+
+### SC-Auditor & Subtools
+
+If Interview.md contains an "SC-Auditor Decision" section with `Approved: yes`, install sc-auditor and its subtools:
+
+1. **sc-auditor** (requires Node.js >= 22):
+   ```bash
+   node --version  # Verify >= 22
+   npm install -g sc-auditor  # or use npx at runtime
+   ```
+
+2. **Slither** (Python-based static analyzer):
+   ```bash
+   pip install slither-analyzer
+   pip install solc-select && solc-select install 0.8.20 && solc-select use 0.8.20
+   ```
+
+3. **Aderyn** (Rust-based static analyzer):
+   ```bash
+   curl -L https://raw.githubusercontent.com/Cyfrin/aderyn/dev/cyfrinup/install | bash
+   cyfrinup
+   ```
+
+4. **Foundry** (Solidity testing framework):
+   ```bash
+   curl -L https://foundry.paradigm.xyz | bash
+   foundryup
+   ```
+
+5. **Echidna** (invariant fuzzer) -- optional:
+   ```bash
+   pip install echidna 2>/dev/null || echo "Echidna not available via pip -- may need manual install"
+   ```
+
+6. **Medusa** (fuzz testing) -- optional:
+   ```bash
+   command -v medusa 2>/dev/null || echo "Medusa not installed -- skip"
+   ```
+
+7. **Halmos** (symbolic execution) -- optional:
+   ```bash
+   pip install halmos 2>/dev/null || echo "Halmos not available via pip -- may need manual install"
+   ```
+
+For each tool, check if already installed before attempting installation. Record all results (installed, already present, or failed) in UpdateTooling.md. If the Solodit API key was noted as available, verify `SOLODIT_API_KEY` is set in the environment or `.env` file.
 
 ### Step 2: Check Existing Installations
 

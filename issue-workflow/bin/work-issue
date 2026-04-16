@@ -4,7 +4,7 @@ set -uo pipefail
 # ═══════════════════════════════════════════════════════════════════
 # work-issue - Claude Code autonomous workflow orchestrator
 # ═══════════════════════════════════════════════════════════════════
-# Usage: work-issue <issue-number> [--effort high|max] [--model <model>] [--resume <stage>]
+# Usage: work-issue <issue-number> [--effort high|xhigh|max] [--model <model>] [--resume <stage>]
 #
 # Orchestrates a full issue-to-PR workflow by launching sequential
 # Claude Code sessions, each with a dedicated skill and fresh context.
@@ -112,18 +112,18 @@ declare -A STAGE_MODEL=(
 # ── Effort assignments (configurable via env vars) ────────────────
 declare -A STAGE_EFFORT=(
   [setup]="${ISSUE_WORKFLOW_EFFORT_SETUP:-low}"
-  [research]="${ISSUE_WORKFLOW_EFFORT_RESEARCH:-high}"
-  [interview]="${ISSUE_WORKFLOW_EFFORT_INTERVIEW:-high}"
-  [plan]="${ISSUE_WORKFLOW_EFFORT_PLAN:-high}"
-  [execute]="${ISSUE_WORKFLOW_EFFORT_EXECUTE:-high}"
-  [debug]="${ISSUE_WORKFLOW_EFFORT_DEBUG:-high}"
-  [verify]="${ISSUE_WORKFLOW_EFFORT_VERIFY:-high}"
-  [review]="${ISSUE_WORKFLOW_EFFORT_REVIEW:-high}"
-  [integrate]="${ISSUE_WORKFLOW_EFFORT_INTEGRATE:-high}"
+  [research]="${ISSUE_WORKFLOW_EFFORT_RESEARCH:-xhigh}"
+  [interview]="${ISSUE_WORKFLOW_EFFORT_INTERVIEW:-xhigh}"
+  [plan]="${ISSUE_WORKFLOW_EFFORT_PLAN:-xhigh}"
+  [execute]="${ISSUE_WORKFLOW_EFFORT_EXECUTE:-xhigh}"
+  [debug]="${ISSUE_WORKFLOW_EFFORT_DEBUG:-xhigh}"
+  [verify]="${ISSUE_WORKFLOW_EFFORT_VERIFY:-xhigh}"
+  [review]="${ISSUE_WORKFLOW_EFFORT_REVIEW:-xhigh}"
+  [integrate]="${ISSUE_WORKFLOW_EFFORT_INTEGRATE:-xhigh}"
 )
 
 # ── Defaults ──────────────────────────────────────────────────────
-EFFORT="${CLAUDE_CODE_EFFORT_LEVEL:-high}"
+EFFORT="${CLAUDE_CODE_EFFORT_LEVEL:-xhigh}"
 EFFORT_EXPLICIT=false
 RESUME_FROM=""
 ISSUE=""
@@ -138,7 +138,7 @@ Stages run as a state machine -- pre-execution stages can loop freely,
 post-execution stages can loop back to verify.
 
 Options:
-  --effort <level>   Effort level: high (default) or max
+  --effort <level>   Effort level: high, xhigh (default), or max
   --model <model>    Override model for all stages (e.g., sonnet, opus[1m])
   --resume <stage>   Resume from a specific stage (skips prior stages)
   --help             Show this help message
@@ -188,7 +188,7 @@ shift
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --effort) EFFORT="${2:?--effort requires a value (high or max)}"; EFFORT_EXPLICIT=true; shift 2 ;;
+    --effort) EFFORT="${2:?--effort requires a value (high, xhigh, or max)}"; EFFORT_EXPLICIT=true; shift 2 ;;
     --model)
       ISSUE_WORKFLOW_MODEL="${2:?--model requires a value}"
       export ISSUE_WORKFLOW_MODEL
