@@ -168,6 +168,13 @@ Configuration (env vars):
   ISSUE_WORKFLOW_MODEL_<STAGE>      Override model for one stage (e.g., _RESEARCH)
   ISSUE_WORKFLOW_EFFORT_<STAGE>     Override effort for one stage
   ISSUE_WORKFLOW_SKILL_PREFIX       Skill name prefix (e.g., "issue-workflow:")
+  CLAUDE_PLUGINS_SKIP_UPDATE        Set to skip the startup marketplace refresh
+
+Auto-update:
+  On fresh runs (not --resume), the orchestrator refreshes the marketplace
+  and force-installs the latest plugin version before starting. The update
+  takes effect on the next stage (every stage spawns a fresh claude session).
+  Set CLAUDE_PLUGINS_SKIP_UPDATE=1 to skip.
 
 Examples:
   work-issue 42                     # Full workflow for issue #42
@@ -234,6 +241,19 @@ cd "$REPO_ROOT"
 # NOTE: Permissions are handled by settings.json (defaultMode: bypassPermissions).
 # If that doesn't work in practice, add --dangerously-skip-permissions to each
 # claude invocation below.
+
+# ── Plugin self-update ────────────────────────────────────────────
+# Refresh the marketplace catalog, then force-install the latest plugin
+# version. The update takes effect on the next stage's fresh claude
+# invocation (every stage is a restart). Skipped on --resume to avoid
+# skill/orchestrator changes mid-workflow.
+if [[ -z "$RESUME_FROM" && -z "${CLAUDE_PLUGINS_SKIP_UPDATE:-}" ]]; then
+  echo "Checking for plugin updates..."
+  timeout 30 claude plugin marketplace update 22a435-workflows >/dev/null 2>&1 || true
+  if ! timeout 60 claude plugin update issue-workflow@22a435-workflows >/dev/null 2>&1; then
+    echo "Warning: plugin update failed or timed out; continuing with installed version." >&2
+  fi
+fi
 
 # ── Read issue from GitHub ────────────────────────────────────────
 echo "Reading issue #${ISSUE}..."
