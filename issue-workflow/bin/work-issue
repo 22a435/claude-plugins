@@ -249,8 +249,8 @@ cd "$REPO_ROOT"
 # skill/orchestrator changes mid-workflow.
 if [[ -z "$RESUME_FROM" && -z "${CLAUDE_PLUGINS_SKIP_UPDATE:-}" ]]; then
   echo "Checking for plugin updates..."
-  timeout 20 claude plugin marketplace update 22a435-workflows || true
-  if ! timeout 20 claude plugin update issue-workflow@22a435-workflows; then
+  timeout --kill-after=5 20 claude plugin marketplace update 22a435-workflows </dev/null || true
+  if ! timeout --kill-after=5 20 claude plugin update issue-workflow@22a435-workflows </dev/null; then
     echo "Warning: plugin update failed or timed out; continuing with installed version." >&2
   fi
 fi
