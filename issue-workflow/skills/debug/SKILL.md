@@ -21,6 +21,7 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 - **Subagent cost optimization:** Downgrade codebase investigation agents (Explore) and external research agents to `model: "sonnet"`. Keep the parent session's model for hypothesis-testing agents that require full reasoning capability.
 - **Subagent write boundary:** Subagents must NOT create, edit, or write any files under `./claude-work/`. They may modify source code files elsewhere in the repo. Only this parent session writes to `./claude-work/$0/`. Include this constraint in every subagent prompt you compose.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
+- **Follow-up issues, not dismissal:** Pre-existing bugs are not valid grounds for dismissal -- the goal is to leave the codebase in the best working order regardless of bug origin. When a finding is genuinely too complex or out of scope to fix in this PR, file a GitHub issue via `gh issue create` -- never a document-only note. Every stage that surfaces a deferrable finding is responsible for filing it.
 
 ## Context
 - **Issue number:** $0 (numeric GitHub issue ID -- not a title, keyword, or topic name)
@@ -76,7 +77,7 @@ For each plausible explanation:
 Once the root cause is confirmed:
 
 **If the fix is a straightforward bug fix** (typo, wrong variable, missing null check, incorrect API usage):
-- Proceed directly to implementation
+- Proceed directly to implementation. A bounded bug fix goes here even if the bug is pre-existing -- the goal is to leave the codebase in the best working order regardless of bug origin.
 
 **If the fix involves a design choice** (architecture change, different library, altered behavior, tradeoff between approaches):
 - Present the situation to the user:
@@ -85,6 +86,20 @@ Once the root cause is confirmed:
   - Tradeoffs of each option
   - Your recommendation
 - Wait for user input before proceeding
+
+**If the proper fix is genuinely out of scope for this PR** (would require a separate effort, architectural refactor, broader restructuring, or commits outside the area this PR touches):
+- Apply a minimal, low-risk mitigation or revert if one is available (e.g., a narrow guard, disabling the broken path, reverting the change that surfaced the bug). Record the mitigation in Debug.md.
+- File a follow-up issue via `gh issue create` containing the full root-cause analysis from Step 2:
+
+  ```bash
+  gh issue create \
+    --title "<concise title>" \
+    --body "<root cause from Step 2, affected components, suggested approach, cross-reference: 'Identified during debug of PR #<pr-number> for issue #<issue-number>. See ./claude-work/<issue>/Debug.md'>" \
+    --label "followup,from-pr-#<pr-number>"
+  ```
+
+- Record the issue number and URL in Debug.md's "Follow-up Issues Created" section (see Step 5).
+- A confirmed root cause must never be left unfiled. "Out of scope" is not a reason to drop the investigation -- it is a reason to file it, mitigate it, and move on.
 
 ### Step 4: Apply the Fix
 
@@ -118,13 +133,24 @@ What failed, the exact error, and what had been tried before escalation.
 <Detailed explanation of what was actually wrong and why>
 
 ### Remediation
-**Approach:** <what was done to fix it>
+**Approach:** <what was done to fix it | mitigation applied + follow-up issue filed>
 **Design choice escalated to user:** <yes/no -- if yes, what was decided>
+**Scope decision:** <full fix in this PR | mitigation + follow-up issue #<n> for proper fix>
 **Files changed:** <list>
 
 ### Verification
 - <check 1>: PASS
 - <check 2>: PASS
+
+### Follow-up Issues Created
+
+<One subsection per issue filed in Step 3's out-of-scope branch. If none, write the single line: "None -- fix was applied in full.">
+
+#### Issue #<n>: <title>
+- **URL:** <gh url>
+- **Source failure:** <original root cause>
+- **Why deferred:** <criterion: tradeoff / architecture / blast radius / team-discussion / breaking-upgrade / benchmark-needed / out-of-scope>
+- **Mitigation applied in this PR:** <yes -- describe | no>
 
 ### Impact on Remaining Work
 <Any implications for execute/verify to be aware of>
@@ -140,9 +166,12 @@ git commit -m "claude-work(debug): resolved issue for #$0"
 git push
 ```
 
-Post a summary to the PR thread:
+Post a summary to the PR thread. The comment MUST include a `Deferred (follow-up issues):` line -- either a list of issue numbers filed in Step 3's out-of-scope branch, or the literal word `none`.
+
 ```bash
-gh pr comment --body "<debug summary: what was wrong, what was fixed, verification results>"
+gh pr comment --body "<debug summary: what was wrong, what was fixed, verification results
+
+Deferred (follow-up issues): #<n1>, #<n2>  # or 'none'>"
 ```
 
 ## Stage Transition Signal

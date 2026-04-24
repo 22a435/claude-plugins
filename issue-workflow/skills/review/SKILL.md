@@ -21,6 +21,7 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 - **Subagent cost optimization:** Review agents performing code analysis should use `model: "sonnet"` -- they are scanning for patterns and reporting findings. Keep the parent session's model for synthesizing results and making severity judgments.
 - **Subagent write boundary:** Subagents in this stage must NOT create, edit, or write any files under `./claude-work/`. Only this parent session writes the output document. Include this constraint in every subagent prompt you compose.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
+- **Follow-up issues, not dismissal:** Pre-existing bugs are not valid grounds for dismissal -- the goal is to leave the codebase in the best working order regardless of bug origin. When a finding is genuinely too complex or out of scope to fix in this PR, file a GitHub issue via `gh issue create` -- never a document-only note. Every stage that surfaces a deferrable finding is responsible for filing it.
 
 ## Context
 - **Issue number:** $0 (numeric GitHub issue ID -- not a title, keyword, or topic name)
@@ -123,18 +124,56 @@ Categorize each finding:
 - **Important:** Should fix (code quality, missing tests, documentation gaps)
 - **Suggestion:** Nice to have (style improvements, minor optimizations)
 
+**Severity is determined by current impact, not by origin.** A finding's severity reflects its effect on correctness, security, or quality *today* -- NOT whether it predates this PR. "Pre-existing" is never a valid reason to downgrade or dismiss a finding. The goal is to leave the codebase in the best working order regardless of where a bug came from.
+
+The only legitimate reasons to lower severity or route a finding away from "fix now" are the **Create-Issue criteria**: the proper fix requires tradeoffs the user should decide, architectural refactoring, high blast radius, team discussion, breaking upgrades, or performance benchmarking. These findings do not get dismissed -- they get filed as follow-up issues per Step 5a. Silent dismissal is never acceptable.
+
 ### Step 5: Handle Findings by Severity
 
-**Critical and Important findings** (bugs, security issues, data loss risks, code quality issues requiring code changes):
+Route each finding into one of three lanes based on the scope of its proper fix:
+
+**Lane A -- Critical/Important with a clear, bounded fix:**
 - Do NOT attempt to fix these directly during review
 - Document them thoroughly in Review.md with full details (see Step 7)
 - After completing the review, signal `debug` as the next stage
 - The debug stage will investigate root causes and apply fixes with proper verification
+- This lane is the default for Critical/Important findings unless a Create-Issue criterion clearly applies
 
-**Suggestion findings** (style improvements, minor optimizations, documentation, comments):
-- For non-functional changes: implement them without asking unless you're unsure
+**Lane B -- Critical/Important that meets a Create-Issue criterion** (tradeoffs / architecture / high blast radius / team discussion / breaking upgrade / benchmark-needed):
+- File a follow-up GitHub issue in Step 5a with full context
+- If a safe, low-risk short-term mitigation exists (e.g., a minimal guard, revert, or workaround that does not commit to the larger design), route that mitigation to `debug` as a Lane-A finding; the follow-up issue captures the real fix
+- If no safe mitigation exists, document clearly in Review.md why merge may still proceed and ensure the follow-up issue captures the full context
+- Never let a Create-Issue finding remain as a document-only note -- it must become a real issue
+
+**Lane C -- Suggestions** (style improvements, minor optimizations, documentation, comments):
+- For non-functional changes: implement them without asking unless you're unsure. Pre-existing status does NOT exempt a suggestion from being applied -- if you touched or reviewed the area, the cleanup is in scope
 - For changes affecting features or functionality: present them to the user, get approval, then implement approved changes
+- If a suggestion meets the Create-Issue criteria (e.g., a broader style/architecture cleanup that should not be bundled into this PR), file it as a follow-up issue per Step 5a rather than dropping it
 - Record all decisions
+
+### Step 5a: Create Follow-up Issues
+
+For every finding routed to Lane B above (and any Lane-C suggestion that meets the Create-Issue criteria), file a real GitHub issue -- do not rely on Review.md alone. Auto-create without asking; the `followup,from-pr-#<pr-number>` label makes spurious ones easy to find and close.
+
+For each follow-up:
+
+```bash
+gh issue create \
+  --title "<concise title describing the problem>" \
+  --body "<body content per template below>" \
+  --label "followup,from-pr-#<pr-number>"
+```
+
+The issue body must include:
+- **Description** of the problem or opportunity
+- **Exact finding** quoted from Review.md (so future readers see the original context)
+- **Suggested approach** if one is known (otherwise note "approach TBD")
+- **Why deferred**: which Create-Issue criterion applies (tradeoff / architecture / blast radius / team discussion / breaking upgrade / benchmark-needed / out-of-scope)
+- **Cross-reference** line: `Identified during review of PR #<pr-number> for issue #<issue-number>. See ./claude-work/<issue>/Review.md` (use `gh pr view --json number` to get the PR number if unknown)
+
+Capture the returned issue number and URL for each created issue. Record them in Review.md's "Follow-up Issues Created" section (see Step 7).
+
+**Reminder -- when to file, when to fix:** The Create-Issue criteria are narrow on purpose. If a Critical/Important finding is a bounded bug fix -- even a hairy one -- it goes to `debug`, not to a follow-up issue. Filing a follow-up is a commitment that the *proper* fix exceeds this PR's scope, not a way to avoid work.
 
 ### Step 6: Implement Approved Suggestion Changes
 
@@ -152,6 +191,7 @@ Do NOT implement Critical or Important findings -- those are handled by the debu
 - **Findings:** <N critical, N important, N suggestions>
 - **Changes made:** <N items addressed>
 - **Code changes made:** <yes/no -- if yes, signals verify for orchestrator-level re-verification>
+- **Follow-up issues filed:** <N -- list numbers, or "none">
 - **Repo-local tooling used:** <list of discovered skills/subagents/linters, or "none found">
 
 ## Repo-Local Tooling Results
@@ -167,6 +207,16 @@ Do NOT implement Critical or Important findings -- those are handled by the debu
 
 ### Suggestions
 <findings, decisions, and resolutions>
+
+## Follow-up Issues Created
+
+<One subsection per issue filed in Step 5a. If none were filed, write the single line: "None -- all findings were either fixed or routed to debug.">
+
+### Issue #<n>: <title>
+- **URL:** <gh url>
+- **Source finding:** <quote or section reference back to Review Findings above>
+- **Why deferred:** <criterion: tradeoff / architecture / blast radius / team-discussion / breaking-upgrade / benchmark-needed / out-of-scope>
+- **Mitigation applied in this PR:** <yes -- describe | no>
 
 ## Changes Made During Review
 List of changes applied, with rationale.
@@ -188,9 +238,12 @@ git commit -m "claude-work(review): review complete for issue #$0"
 git push
 ```
 
-Post summary to PR:
+Post summary to PR. The comment MUST include a `Deferred (follow-up issues):` line -- either a list of issue numbers/URLs filed in Step 5a, or the literal word `none`. Never omit this line silently; it is how the reviewer sees what was deferred.
+
 ```bash
-gh pr comment --body "<review summary and final assessment>"
+gh pr comment --body "<review summary and final assessment
+
+Deferred (follow-up issues): #<n1>, #<n2>  # or 'none'>"
 ```
 
 ## Stage Transition Signal

@@ -21,6 +21,7 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 - **Subagent cost optimization:** Verification-running agents should use `model: "sonnet"` -- they are executing checks and reporting results, not making judgment calls. Keep the parent session's model for analyzing failures and deciding whether to escalate.
 - **Subagent write boundary:** Subagents in this stage must NOT create, edit, or write any files under `./claude-work/`. Only this parent session writes the output document. Include this constraint in every subagent prompt you compose.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
+- **Follow-up issues, not dismissal:** Pre-existing bugs are not valid grounds for dismissal -- the goal is to leave the codebase in the best working order regardless of bug origin. When a finding is genuinely too complex or out of scope to fix in this PR, file a GitHub issue via `gh issue create` -- never a document-only note. Every stage that surfaces a deferrable finding is responsible for filing it.
 
 ## Context
 - **Issue number:** $0 (numeric GitHub issue ID -- not a title, keyword, or topic name)
@@ -87,6 +88,24 @@ If any verification check fails:
 3. Record all failure details in Verify.md (see Step 5), with enough context for the debug stage to investigate without re-running the checks.
 4. After documenting all results, commit, push, and signal `debug` as the next stage (see Stage Transition Signal).
 
+**Pre-existing failures:** If a failing check was already failing on `main` before this branch existed, it is still a failure. Pre-existing status is NEVER grounds to mark verify as PASS. Two responses are valid:
+
+- **(a) Route to `debug` to fix it now.** This is the default. The goal is to leave the codebase in the best working order regardless of bug origin.
+- **(b) File a follow-up issue and mark the row `DEFERRED-ISSUE #<n>`.** Only valid if the proper fix meets the Create-Issue criteria (tradeoffs the user should decide, architectural refactoring, high blast radius, team discussion, breaking upgrades, or benchmark-needed performance work) AND is truly out of scope for this PR. Option (b) requires explicit rationale in Verify.md; it is not the default.
+
+To file a follow-up issue:
+
+```bash
+gh issue create \
+  --title "<concise title>" \
+  --body "<problem description, quoted failure output, cross-reference: 'Identified during verification of PR #<pr-number> for issue #<issue-number>. See ./claude-work/<issue>/Verify.md'>" \
+  --label "followup,from-pr-#<pr-number>"
+```
+
+Record the issue number and URL in Verify.md's "Follow-up Issues Created" section. In the "Failures Requiring Debug" table, annotate deferred rows as `DEFERRED-ISSUE #<n>` instead of leaving them as plain failures.
+
+If all remaining failures are deferred and there is nothing left for `debug` to investigate, the default transition to `debug` should be replaced by advancing to `review` -- but mark verify status as FAIL in the summary so the review stage sees the deferred context.
+
 ### Step 5: Write Verify.md
 
 ```
@@ -98,6 +117,7 @@ If any verification check fails:
 - **Full suite:** PASS / FAIL
 - **Test suites run:** <list>
 - **Failures requiring debug:** <N>
+- **Failures deferred to follow-up issues:** <N -- list numbers, or "none">
 
 ## Component Verification
 
@@ -123,6 +143,17 @@ For each failure, provide enough context for the debug stage to investigate with
 - **Error output:** <complete error output>
 - **Affected component:** <which component or module>
 - **Observations:** <any patterns noticed, e.g., "only fails when X", "worked in component verification but fails in integration">
+- **Status:** TO-DEBUG | DEFERRED-ISSUE #<n> (with rationale for deferral)
+
+## Follow-up Issues Created
+
+<One subsection per issue filed in Step 4 option (b). If none, write the single line: "None -- all failures routed to debug.">
+
+### Issue #<n>: <title>
+- **URL:** <gh url>
+- **Source failure:** <which check, quoted error>
+- **Why deferred:** <criterion: tradeoff / architecture / blast radius / team-discussion / breaking-upgrade / benchmark-needed / out-of-scope>
+- **Mitigation applied in this PR:** <yes -- describe | no>
 
 ## Verification Conclusion
 <Final assessment: is the implementation complete and correct?>
@@ -136,9 +167,12 @@ git commit -m "claude-work(verify): verification complete for issue #$0"
 git push
 ```
 
-Post results to the PR thread:
+Post results to the PR thread. The comment MUST include a `Deferred (follow-up issues):` line -- either a list of issue numbers filed in Step 4, or the literal word `none`.
+
 ```bash
-gh pr comment --body "<verification summary>"
+gh pr comment --body "<verification summary
+
+Deferred (follow-up issues): #<n1>, #<n2>  # or 'none'>"
 ```
 
 The PR comment should clearly state whether all verification passed, and if any debug cycles were needed.

@@ -20,6 +20,7 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 - **PR updates:** Post a summary to the PR thread (via `gh pr comment`) after each stage.
 - **Subagent cost optimization:** Downgrade information-gathering agents (Explore, web research, context7) to `model: "sonnet"`. Keep the parent session's model for implementation and reasoning agents.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
+- **Follow-up issues, not dismissal:** Pre-existing bugs are not valid grounds for dismissal -- the goal is to leave the codebase in the best working order regardless of bug origin. When a finding is genuinely too complex or out of scope to fix in this PR, file a GitHub issue via `gh issue create` -- never a document-only note. Every stage that surfaces a deferrable finding is responsible for filing it.
 
 ## Context
 - **Issue number:** $0 (numeric GitHub issue ID -- not a title, keyword, or topic name)
@@ -46,6 +47,8 @@ If main has not moved since the branch was created (no new commits), integration
 ## Summary
 Main has not diverged. No integration needed. Branch is ready for merge.
 ```
+
+Before writing Integration.md and exiting, run the follow-up issue existence check from Step 6 -- it applies to both the trivial and rebased paths. If any referenced issues are missing, file them now (with the review/verify/debug context) before signaling `done`.
 
 Write this to Integration.md, commit, push, and signal `done` to skip redundant post-integration re-verification:
 ```bash
@@ -98,7 +101,44 @@ git push --force-with-lease origin claude/$0
 
 Note: `--force-with-lease` is safe here because this is a feature branch that only this workflow writes to.
 
-### Step 6: Write Integration.md
+### Step 6: Verify Referenced Follow-up Issues Exist
+
+Prior stages (review, verify, debug) may have recorded follow-up issues under a `## Follow-up Issues Created` section. Before marking integration complete, confirm every referenced issue actually exists on GitHub -- a missing issue means the `gh issue create` call was skipped or failed, and the context would be lost.
+
+```bash
+# Extract issue numbers only from within each document's "## Follow-up Issues Created" section.
+# The subsection header shape is "### Issue #<n>:" (review/verify) or "#### Issue #<n>:" (debug).
+for doc in Review.md Verify.md Debug.md; do
+  path="./claude-work/$0/$doc"
+  [ -f "$path" ] || continue
+  # awk: print lines between '## Follow-up Issues Created' and the next level-2 heading,
+  # then grep for the issue-subsection pattern.
+  awk '/^## Follow-up Issues Created/{in_section=1; next} /^## /{in_section=0} in_section' "$path" \
+    | grep -oE '^####? Issue #[0-9]+' \
+    | grep -oE '[0-9]+'
+done | sort -u > /tmp/claim-issues-$0.txt
+```
+
+For each issue number found, verify it exists:
+
+```bash
+while read -r n; do
+  if ! gh issue view "$n" --json number >/dev/null 2>&1; then
+    echo "MISSING: issue #$n is referenced but does not exist" >&2
+  fi
+done < /tmp/claim-issues-$0.txt
+```
+
+If any issue is missing:
+
+1. Re-read the stage document that referenced it to recover the full context (title, description, why-deferred).
+2. File the issue now via `gh issue create --label "followup,from-pr-#<pr-number>"` with a body that includes the original context.
+3. Update the stage document to replace the placeholder/wrong number with the newly created one (mark the edit with `> [IN-PLACE EDIT during integrate phase]: <reason>` per the Workflow Context rules).
+4. Commit the document update.
+
+If all referenced issues exist, proceed.
+
+### Step 7: Write Integration.md
 
 ```
 # Integration Report: Issue #<number>
@@ -122,13 +162,23 @@ Brief summary of what changed on main (from git log).
 - **Rebase:** Successful
 - **Force push:** Complete
 - **Smoke test:** PASS/FAIL
+- **Follow-up issue check:** PASS (<N> issues verified) / FAIL -- <N> filed during integrate
+
+## Follow-up Issues Filed During Integrate
+
+<One subsection per issue filed in Step 6 because it was referenced but missing. If none were missing, write: "None -- all referenced follow-up issues already existed.">
+
+### Issue #<n>: <title>
+- **URL:** <gh url>
+- **Originally referenced in:** <Review.md / Verify.md / Debug.md>
+- **Why originally missed:** <e.g., gh issue create failed silently; placeholder never replaced>
 
 ## Note
 If rebase introduced changes, the orchestrator repeats the verify->review->integrate
 pipeline. Integration.md documents only the rebase/merge process itself.
 ```
 
-### Step 7: Commit and Push
+### Step 8: Commit and Push
 
 **Important:** Commit ALL files changed during this stage, not just the integration document.
 
@@ -143,7 +193,7 @@ Post to PR:
 gh pr comment --body "<integration summary -- conflicts resolved, ready for re-verification>"
 ```
 
-### Step 8: Signal Transition
+### Step 9: Signal Transition
 
 Signal `verify` to repeat the verify->review->integrate pipeline and confirm the rebase didn't break anything:
 ```bash
