@@ -1,13 +1,13 @@
 ---
 name: remediation
-description: Apply approved remediations, create GitHub issues for complex items, run /simplify cleanup. The ONLY stage that edits repo code. Invoke with /deep-review:remediation <session-number>.
+description: Apply approved remediations, create GitHub issues for complex items, run /code-review cleanup. The ONLY stage that edits repo code. Invoke with /deep-review:remediation <session-number>.
 disable-model-invocation: true
 allowed-tools: Read, Grep, Glob, Bash, Agent, Write, Edit, WebSearch, WebFetch, Skill
 ---
 
 # Remediation Phase
 
-You are performing the **remediation** stage of a deep codebase review. Your job is to apply all approved remediations from the remediation plan, create GitHub issues for complex items, and run a final `/simplify` cleanup pass.
+You are performing the **remediation** stage of a deep codebase review. Your job is to apply all approved remediations from the remediation plan, create GitHub issues for complex items, and run a final `/code-review` cleanup pass.
 
 ## Workflow Context
 
@@ -80,18 +80,18 @@ Follow the execution order from the plan. For each batch of parallelizable remed
    - Continue to next batch if current batch succeeded
    - If a remediation failed: document it but continue with unblocked remediations
 
-### Step 3: Run /simplify Cleanup
+### Step 3: Run /code-review Cleanup
 
-After all remediations are applied, run the `/simplify` skill as a final cleanup pass on the changes made:
+After all remediations are applied, run the `/code-review` skill as a final cleanup pass on the changes made:
 
 1. Get the list of files changed during remediation:
    ```bash
    git diff --name-only HEAD
    ```
 
-2. Invoke `/simplify` to review the changed code for opportunities to improve reuse, quality, and efficiency.
+2. Invoke `/code-review` to review the changed code for reuse, quality, and efficiency, and fix any issues found.
 
-3. Record what `/simplify` changed (if anything).
+3. Record what `/code-review` changed (if anything).
 
 ### Step 4: Create GitHub Issues
 
@@ -123,7 +123,7 @@ Write `./claude-reviews/$0/Remediation.md`:
 ## Summary
 - **Remediations applied:** <N>/<M> (succeeded/total planned)
 - **Issues created:** <N>
-- **Simplification changes:** <N> files modified by /simplify
+- **Code review changes:** <N> files modified by /code-review
 - **Failures:** <N>
 
 ## Remediations Applied
@@ -137,8 +137,8 @@ Write `./claude-reviews/$0/Remediation.md`:
 
 ### Remediation 2: ...
 
-## Simplification Pass
-What `/simplify` found and changed (or "No changes recommended"):
+## Code Review Pass
+What `/code-review` found and changed (or "No changes recommended"):
 - `path/to/file.ts` -- <what was simplified>
 - ...
 
@@ -185,7 +185,7 @@ gh pr comment "claude/review/$0" --body "**Remediation Complete**
 
 - Remediations applied: <N>/<M>
 - Issues created: <N> (<list issue numbers>)
-- /simplify changes: <N> files
+- /code-review changes: <N> files
 - Failures: <N>
 
 <brief description of key changes made>

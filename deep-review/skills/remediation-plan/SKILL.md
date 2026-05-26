@@ -114,7 +114,7 @@ Which remediations can be parallelized and which must be sequential.
 
 1. Remediations A and B (parallel -- different files, no dependencies)
 2. Remediation C (depends on A -- same file)
-3. Remediation D (independent, but should be last -- runs /simplify cleanup)
+3. Remediation D (independent, but should be last -- runs /code-review cleanup)
 ```
 
 ### Step 4: Commit and Push

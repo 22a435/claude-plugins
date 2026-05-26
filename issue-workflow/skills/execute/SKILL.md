@@ -62,18 +62,18 @@ Follow the execution order from the plan. For each batch of parallelizable compo
 
 5. **Proceed to the next batch** once all components in the current batch pass verification (or are documented as failures).
 
-### Step 3: Simplification Pass
+### Step 3: Code Review Pass
 
-After all components are implemented and verified, run `/simplify` as a cleanup pass on the changed code. **Skip this step entirely if any component failed verification** -- there is no point simplifying code that will change during a debug cycle.
+After all components are implemented and verified, run `/code-review` as a cleanup pass on the changed code. **Skip this step entirely if any component failed verification** -- there is no point reviewing code that will change during a debug cycle.
 
 1. Get the list of files changed during execution:
    ```bash
    git diff --name-only HEAD
    ```
 
-2. Invoke `/simplify` to review the changed code for opportunities to improve reuse, quality, and efficiency.
+2. Invoke `/code-review` to review the changed code for reuse, quality, and efficiency, and fix any issues found.
 
-3. Record what `/simplify` changed (if anything) for inclusion in Execute.md.
+3. Record what `/code-review` changed (if anything) for inclusion in Execute.md.
 
 ### Step 4: Write Execute.md
 
@@ -108,8 +108,8 @@ Brief overview: what was implemented, how long it took, any issues encountered.
 - **Blocked components:** <components that depend on this one and were skipped>
 - **Context:** <any relevant observations about why it might be failing>
 
-## Simplification Pass
-What `/simplify` found and changed (or "No changes recommended" or "Skipped -- component failures require debug"):
+## Code Review Pass
+What `/code-review` found and changed (or "No changes recommended" or "Skipped -- component failures require debug"):
 - `path/to/file.ts` -- <what was simplified>
 - ...
 

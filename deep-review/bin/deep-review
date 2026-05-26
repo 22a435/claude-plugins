@@ -70,7 +70,7 @@ declare -A STAGE_DESC=(
   [plan]="Draft and approve review plan"
   [review]="Deep review with parallel sub-reviewers"
   [remediation-plan]="Draft and approve remediation plan"
-  [remediation]="Apply remediations, create issues, run /simplify"
+  [remediation]="Apply remediations, create issues, run /code-review"
   [verify]="Verify remediations match plan and code"
   [integrate]="Prepare branch for merge"
 )
@@ -175,7 +175,7 @@ Stages:
   plan               Draft and approve comprehensive review plan
   review             Deep review with up to 10 parallel sub-reviewers
   remediation-plan   Draft and approve remediation plan from findings
-  remediation        Apply fixes, create issues, run /simplify cleanup
+  remediation        Apply fixes, create issues, run /code-review cleanup
   verify             Verify remediations match plan and code
   integrate          Prepare review branch for merge; rebase onto main
 

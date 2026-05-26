@@ -70,7 +70,7 @@ The `plan-sc-audit` and `run-sc-audit` stages are conditional -- they only run f
 | **plan** | opus[1m] | Draft comprehensive review plan; requires user approval |
 | **review** | opus[1m] | Deep review with up to 10 parallel sub-reviewers |
 | **remediation-plan** | opus[1m] | Prioritize fixes and issues; requires user approval |
-| **remediation** | sonnet[1m] | Apply fixes, create issues, run /simplify cleanup |
+| **remediation** | sonnet[1m] | Apply fixes, create issues, run /code-review cleanup |
 | **verify** | sonnet[1m] | Verify remediations match plan and code |
 | **integrate** | opus[1m] | Prepare branch for merge; rebase onto main if needed |
 
