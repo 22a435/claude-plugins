@@ -21,6 +21,21 @@ This skill is one stage of a multi-stage deep review workflow orchestrated by th
 - **Code changes:** This is the ONLY stage that edits source code and documentation in the repository (along with update-tooling for setup scripts). Apply changes carefully and verify each one.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
 
+## Completeness Requirement
+
+Apply each remediation in full. A remediation is not done until the fix is complete end-to-end.
+
+Forbidden in applied code:
+- `TODO`, `FIXME`, or `XXX` comments marking unfinished work in code you wrote
+- Stubs, no-op functions, or placeholder return values standing in for real logic
+- `NotImplementedError`, `unimplemented!()`, `panic!("todo")`, `throw new Error("not implemented")`, `raise NotImplementedError`, or equivalent in any language
+- Comments like "fix this properly later", "MVP for now", "follow-up needed"
+- Mocked or hardcoded responses in production code paths (test fixtures are fine)
+
+If a remediation appears harder than the plan expected, complete it anyway -- do not silently downgrade it to a partial fix. If it is genuinely blocked (the change as planned is impossible, or it surfaces a deeper issue that must be escalated), stop, document the blocker in Remediation.md, and flag it for the user during the next stage. Do not invent a "create issue" item mid-remediation to escape the work; that decision was made during remediation-plan and is locked.
+
+Failures during a remediation's verification do not become follow-up issues either -- they are documented and handled per the standard failure path in Step 2.
+
 ## Context
 - **Session number:** $0 (the review session number passed as your argument)
 - **Work directory:** `./claude-reviews/$0/`
@@ -72,6 +87,7 @@ Follow the execution order from the plan. For each batch of parallelizable remed
    - Only modify the files listed above
    - Do NOT write to any file under ./claude-reviews/
    - If the verification fails, report the failure -- do not attempt alternative fixes
+   - Apply the fix end-to-end. No stubs, TODOs, NotImplementedError, placeholder returns, or "follow-up needed" notes. If a planned change is genuinely impossible, report it back instead of stubbing past it.
    ```
 
 3. **After each batch completes:**

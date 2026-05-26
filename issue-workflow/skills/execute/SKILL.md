@@ -18,10 +18,24 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 - **Document ownership:** You may READ any prior document. Only WRITE to your own output document inside `./claude-work/$0/` (where `$0` is the numeric GitHub issue ID passed as your argument). Never create files, directories, or write anywhere else under `./claude-work/`. When re-triggered, APPEND new sections -- never delete or overwrite existing content. Mark in-place edits with `> [IN-PLACE EDIT during <stage> phase]: <reason>`.
 - **Commits:** Format: `claude-work(<stage>): <description> [#<issue>]`. Commit and push after completing the stage.
 - **PR updates:** Post a summary to the PR thread (via `gh pr comment`) after each stage.
-- **Subagent cost optimization:** Implementation agents should keep this session's model (do NOT specify a model override). Information-gathering agents (Explore, web research, context7 lookups) should use `model: "sonnet"` to reduce cost.
 - **Subagent write boundary:** Subagents must NOT create, edit, or write any files under `./claude-work/`. They may modify source code files elsewhere in the repo. Only this parent session writes to `./claude-work/$0/`. Include this constraint in every subagent prompt you compose.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
 - **Follow-up issues, not dismissal:** Pre-existing bugs are not valid grounds for dismissal -- the goal is to leave the codebase in the best working order regardless of bug origin. When a finding is genuinely too complex or out of scope to fix in this PR, file a GitHub issue via `gh issue create` -- never a document-only note. Every stage that surfaces a deferrable finding is responsible for filing it.
+
+## Completeness Requirement
+
+Implement every component of the plan end-to-end. The implementation is not considered done until every code path the plan specifies is fully built.
+
+Forbidden in the final implementation:
+- `TODO`, `FIXME`, or `XXX` comments that mark unfinished work in code you wrote
+- Stubs, no-op functions, or placeholder return values (`return None`, `return {}`, hardcoded fake data) standing in for real logic
+- `NotImplementedError`, `unimplemented!()`, `panic!("todo")`, `throw new Error("not implemented")`, `raise NotImplementedError`, or equivalent in any language
+- Comments like "implement this in a follow-up", "wire this up later", "MVP for now"
+- Mocked or hardcoded responses in production code paths (test fixtures are fine)
+
+Follow-up issues from this stage are reserved for pre-existing bugs in adjacent code or genuinely out-of-scope cleanup discovered while implementing -- never for parts of the requested feature. If a component is hard, slow, or messy, that is not grounds to defer it; build it. If a component appears impossible as specified, do not silently downgrade it: stop, document the blocker in Execute.md, and ask the user how to proceed.
+
+If verification of a component fails, that routes to `debug` (not a follow-up issue). Debug fixes it and execute re-runs to completion.
 
 ## Context
 - **Issue number:** $0 (numeric GitHub issue ID -- not a title, keyword, or topic name)
@@ -43,10 +57,11 @@ If anything in the plan is unclear, read the earlier documents (Issue.md, Resear
 
 Follow the execution order from the plan. For each batch of parallelizable components:
 
-1. **Launch parallel subagents** -- one general-purpose Agent per independent component. Each agent's prompt should include:
+1. **Launch parallel subagents** -- one general-purpose Agent per independent component. Each agent's prompt must include:
    - The specific component description from the plan
    - The files to modify/create
    - The implementation details
+   - The completeness requirement: "Build the component end-to-end. No stubs, TODOs, NotImplementedError, placeholder returns, or 'implement later' notes. Every code path described in the plan must be fully implemented. If you hit a true blocker, report it back instead of stubbing past it."
    - Instructions to make the code changes and report what was done
 
 2. **Wait for all agents in the batch to complete.**
@@ -114,7 +129,7 @@ What `/code-review` found and changed (or "No changes recommended" or "Skipped -
 - ...
 
 ## Implementation Notes
-Any observations, deviations from the plan, or things the verify/review stages should be aware of.
+Any observations, deviations from the plan, or things the verify/review stages should be aware of. If any component had to be reduced in scope, explain WHY and confirm the user approved that reduction (cross-reference Interview.md or the user message that authorized it).
 
 ## Files Changed
 Complete list of all files added, modified, or deleted.

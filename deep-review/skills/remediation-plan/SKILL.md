@@ -18,9 +18,18 @@ This skill is one stage of a multi-stage deep review workflow orchestrated by th
 - **Document ownership:** You may READ any prior document. Only WRITE to your own output document inside `./claude-reviews/$0/` (where `$0` is the session number passed as your argument). Never create files, directories, or write anywhere else under `./claude-reviews/`. You may edit Remediation-Plan.md in place freely -- git history serves as the audit trail.
 - **Commits:** Format: `claude-review(<stage>): <description> [session #<N>]`. Commit and push after writing and after each revision.
 - **PR updates:** Post a summary to the PR thread (via `gh pr comment`) after completing the stage.
-- **Subagent cost optimization:** Downgrade information-gathering agents to `model: "sonnet"`. Keep the parent session's model for prioritization and judgment.
 - **Subagent write boundary:** Subagents must NOT write to `./claude-reviews/`. Only this parent session writes the output document.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
+
+## Fix-Now Bias
+
+Default to "Fix Now" for every finding with a bounded, well-understood fix -- even if it is tedious, touches several files, or requires a moderately careful change. The goal of this session is to leave the codebase in the best working order, not to push work onto issues.
+
+A finding belongs in "Create Issue" only when its *proper* fix genuinely meets one of the Create-Issue criteria in Step 2 (real tradeoffs the maintainer must decide, true architectural refactor, demonstrably high blast radius, breaking upgrade, performance work that needs benchmarking, or a topic that needs team discussion). "Complex" alone is not a criterion. "Would take a while" is not a criterion. "Touches a lot of files" is not a criterion.
+
+If you are unsure, ask the user during the per-item review (Step 6) rather than quietly routing the item to Create Issue. Silent deferral is never acceptable; explicit user choice is.
+
+The "Skip" bucket follows the same discipline: only false positives, items explicitly deprioritized by the user, and findings clearly outside the review's scope qualify. Anything else with a real fix belongs in Fix Now.
 
 ## Context
 - **Session number:** $0 (the review session number passed as your argument)
@@ -49,13 +58,14 @@ For every finding in Review.md, categorize it into one of three buckets:
 - Dependency updates (minor/patch versions)
 - Dead code removal
 
-**Create Issue** -- Items too complex for immediate remediation:
-- Changes involving tradeoffs the developer should decide
-- Architectural refactors that need careful planning
-- Changes with high blast radius
-- Items requiring team discussion or broader context
+**Create Issue** -- Items whose *proper* fix exceeds this session's scope:
+- Changes involving tradeoffs the maintainer should decide (not just "it's a tradeoff" -- a real choice about product direction or architecture)
+- Architectural refactors that need careful planning and broader design work
+- Changes with demonstrably high blast radius (touches code paths far outside the review's focus area)
+- Items that genuinely require team discussion or context not in this repo
 - Major version upgrades with breaking changes
-- Performance optimizations requiring benchmarking
+- Performance optimizations that require benchmarking to validate
+- "Complex", "tedious", "touches several files", or "would take time" do NOT qualify on their own. If the fix is bounded and well-understood, it belongs in Fix Now even if it is annoying.
 
 **Skip** -- Items not worth addressing:
 - False positives from automated tools

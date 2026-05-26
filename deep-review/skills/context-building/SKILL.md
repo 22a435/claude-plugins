@@ -18,7 +18,6 @@ This skill is one stage of a multi-stage deep review workflow orchestrated by th
 - **Document ownership:** You may READ any prior document. Only WRITE to your own output document inside `./claude-reviews/$0/` (where `$0` is the session number passed as your argument). Never create files, directories, or write anywhere else under `./claude-reviews/` except your output document. When re-triggered, APPEND new sections -- never delete or overwrite existing content. Mark in-place edits with `> [IN-PLACE EDIT during <stage> phase]: <reason>`.
 - **Commits:** Format: `claude-review(<stage>): <description> [session #<N>]`. Commit and push after completing the stage.
 - **PR updates:** This stage creates the draft PR and posts a summary to the PR thread (via `gh pr comment`).
-- **Subagent cost optimization:** Downgrade information-gathering agents (Explore, web research, context7) to `model: "sonnet"`. Keep the parent session's model for synthesis and judgment.
 - **Subagent write boundary:** Subagents in this stage must NOT create, edit, or write any files under `./claude-reviews/`. Only this parent session writes the output document. Include this constraint in every subagent prompt you compose.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
 
@@ -36,7 +35,7 @@ Read `./claude-reviews/$0/Session.md` to get the repository and branch informati
 
 ### Step 2: Conduct Parallel Discovery
 
-Launch multiple discovery agents simultaneously. All agents use `model: "sonnet"` -- they are gathering information, not making judgments.
+Launch multiple discovery agents simultaneously.
 
 **Architecture Mapper** -- launch an Explore agent to:
 - Glob for all source files and map the directory structure
@@ -88,7 +87,7 @@ Record what was found (or that nothing was found).
 
 ### Step 4: Research Additional Tools
 
-Launch a web research agent (`model: "sonnet"`) to recommend review tools based on the detected tech stack.
+Launch a web research agent to recommend review tools based on the detected tech stack.
 
 **Tool recommendation matrix** (use as a starting point, supplement with web research):
 

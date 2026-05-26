@@ -116,14 +116,14 @@ declare -A STAGE_MODEL=(
   [setup]="${DEEP_REVIEW_MODEL_SETUP:-${DEEP_REVIEW_MODEL:-haiku}}"
   [context-building]="${DEEP_REVIEW_MODEL_CONTEXT_BUILDING:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
   [interview]="${DEEP_REVIEW_MODEL_INTERVIEW:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
-  [update-tooling]="${DEEP_REVIEW_MODEL_UPDATE_TOOLING:-${DEEP_REVIEW_MODEL:-sonnet[1m]}}"
+  [update-tooling]="${DEEP_REVIEW_MODEL_UPDATE_TOOLING:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
   [plan-sc-audit]="${DEEP_REVIEW_MODEL_PLAN_SC_AUDIT:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
   [run-sc-audit]="${DEEP_REVIEW_MODEL_RUN_SC_AUDIT:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
   [plan]="${DEEP_REVIEW_MODEL_PLAN:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
   [review]="${DEEP_REVIEW_MODEL_REVIEW:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
   [remediation-plan]="${DEEP_REVIEW_MODEL_REMEDIATION_PLAN:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
-  [remediation]="${DEEP_REVIEW_MODEL_REMEDIATION:-${DEEP_REVIEW_MODEL:-sonnet[1m]}}"
-  [verify]="${DEEP_REVIEW_MODEL_VERIFY:-${DEEP_REVIEW_MODEL:-sonnet[1m]}}"
+  [remediation]="${DEEP_REVIEW_MODEL_REMEDIATION:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
+  [verify]="${DEEP_REVIEW_MODEL_VERIFY:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
   [integrate]="${DEEP_REVIEW_MODEL_INTEGRATE:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
 )
 

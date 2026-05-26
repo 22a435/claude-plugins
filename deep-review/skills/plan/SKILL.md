@@ -18,7 +18,6 @@ This skill is one stage of a multi-stage deep review workflow orchestrated by th
 - **Document ownership:** You may READ any prior document. Only WRITE to your own output document inside `./claude-reviews/$0/` (where `$0` is the session number passed as your argument). Never create files, directories, or write anywhere else under `./claude-reviews/`. You may edit Plan.md in place freely -- git history serves as the audit trail. No append-only constraint applies to this stage.
 - **Commits:** Format: `claude-review(plan): <description> [session #<N>]`. Use `claude-review(plan): draft plan [session #$0]` for the initial write and `claude-review(plan): revise plan -- <summary> [session #$0]` for subsequent edits. Commit and push after writing the initial draft AND after each round of revisions.
 - **PR updates:** Post a summary to the PR thread (via `gh pr comment`) after completing the stage.
-- **Subagent cost optimization:** Downgrade information-gathering agents (Explore, web research, context7) to `model: "sonnet"`. Keep the parent session's model for planning and judgment.
 - **Subagent write boundary:** Subagents in this stage must NOT create, edit, or write any files under `./claude-reviews/`. Only this parent session writes the output document. Include this constraint in every subagent prompt you compose.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
 
@@ -46,7 +45,7 @@ Read `Context.md`, `Interview.md`, and `UpdateTooling.md` (if it exists) in full
 - sc-auditor's proved/confirmed findings should be highlighted in the plan as high-priority remediation targets
 - sc-auditor's design_tradeoff findings should be flagged for the Documentation sub-reviewer
 
-If needed, use Explore agents with `model: "sonnet"` to do targeted codebase lookups to inform the plan.
+If needed, use Explore agents to do targeted codebase lookups to inform the plan.
 
 ### Step 2: Draft the Plan
 

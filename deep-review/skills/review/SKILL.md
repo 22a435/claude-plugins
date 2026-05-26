@@ -19,7 +19,7 @@ This skill is one stage of a multi-stage deep review workflow orchestrated by th
 - **Document ownership:** You may READ any prior document. Only WRITE to `./claude-reviews/$0/Review.md` and files inside `./claude-reviews/$0/sub-reviews/`. Sub-reviewer agents may ONLY write to their own assigned file in `sub-reviews/`. The parent session writes `Review.md`.
 - **Commits:** Format: `claude-review(<stage>): <description> [session #<N>]`. Commit and push after completing the stage.
 - **PR updates:** Post the executive summary to the PR thread (via `gh pr comment`) after completing the stage.
-- **Subagent cost optimization:** All sub-reviewer agents use `model: "sonnet"` -- they are performing analysis and pattern-matching. The parent session (this one, on opus) handles synthesis, cross-referencing, severity judgments, and writing Review.md.
+- **Subagent role:** Sub-reviewer agents perform analysis and pattern-matching against the codebase. The parent session handles synthesis, cross-referencing, severity judgments, and writing Review.md. All subagents inherit the parent session's model unless explicitly overridden.
 - **No code edits:** This stage does NOT edit any source code. It only produces review documents. The remediation stage handles code changes.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
 
@@ -65,7 +65,7 @@ If a tool fails to run, record the error and continue with other tools. Sub-revi
 
 ### Step 3: Launch Parallel Sub-Reviewers
 
-Launch sub-reviewer agents **in parallel** as defined in Plan.md. Each sub-reviewer is an Agent with `model: "sonnet"`.
+Launch sub-reviewer agents **in parallel** as defined in Plan.md.
 
 **Sub-reviewer prompt template** (adapt for each reviewer):
 
@@ -134,7 +134,7 @@ IMPORTANT CONSTRAINTS:
 After all sub-reviewers complete, read every sub-review file. Check the "Areas Needing Further Investigation" section of each.
 
 For areas that need follow-up:
-- Launch targeted follow-up agents (`model: "sonnet"`) to investigate specific concerns
+- Launch targeted follow-up agents to investigate specific concerns
 - Follow-up agents APPEND to the existing sub-review file (add a clearly marked section)
 - Follow-up template:
   ```

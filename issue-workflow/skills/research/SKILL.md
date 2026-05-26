@@ -18,7 +18,6 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 - **Document ownership:** You may READ any prior document. Only WRITE to your own output document inside `./claude-work/$0/` (where `$0` is the numeric GitHub issue ID passed as your argument). Never create files, directories, or write anywhere else under `./claude-work/`. When re-triggered, APPEND new sections -- never delete or overwrite existing content. Mark in-place edits with `> [IN-PLACE EDIT during <stage> phase]: <reason>`.
 - **Commits:** Format: `claude-work(<stage>): <description> [#<issue>]`. Commit and push after completing the stage.
 - **PR updates:** Post a summary to the PR or issue thread (via `gh pr comment` or `gh issue comment`) after each stage.
-- **Subagent cost optimization:** Downgrade information-gathering agents (Explore, web research, context7) to `model: "sonnet"`. Keep the parent session's model for implementation and reasoning agents.
 - **Subagent write boundary:** Subagents in this stage must NOT create, edit, or write any files under `./claude-work/`. Only this parent session writes the output document. Include this constraint in every subagent prompt you compose.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
 - **Follow-up issues, not dismissal:** Pre-existing bugs are not valid grounds for dismissal -- the goal is to leave the codebase in the best working order regardless of bug origin. When a finding is genuinely too complex or out of scope to fix in this PR, file a GitHub issue via `gh issue create` -- never a document-only note. Every stage that surfaces a deferrable finding is responsible for filing it.
@@ -38,8 +37,6 @@ Read `./claude-work/$0/Issue.md` carefully. Understand the full scope of what is
 ### Step 2: Conduct Parallel Research
 
 Launch multiple research efforts simultaneously using parallel subagents. Aim for thoroughness -- it is far better to over-research than to under-research at this stage.
-
-**Model optimization:** All subagents in this stage are information-gathering. Launch every agent with `model: "sonnet"` to reduce cost -- Explore agents, web research agents, and context7 agents. This session (opus) handles synthesis in Steps 3-4.
 
 **Codebase Investigation** -- launch Explore agents (2-3 in parallel) to:
 - Find all files, modules, and functions relevant to the issue

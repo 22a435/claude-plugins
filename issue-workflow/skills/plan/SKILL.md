@@ -18,10 +18,18 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 - **Document ownership:** You may READ any prior document. Only WRITE to your own output document inside `./claude-work/$0/` (where `$0` is the numeric GitHub issue ID passed as your argument). Never create files, directories, or write anywhere else under `./claude-work/`. You may edit Plan.md in place freely -- git history serves as the audit trail. No append-only constraint applies to this stage.
 - **Commits:** Format: `claude-work(plan): <description> [#<issue>]`. Use `claude-work(plan): draft plan [#$0]` for the initial write and `claude-work(plan): revise plan -- <summary> [#$0]` for subsequent edits. Commit and push after writing the initial draft AND after each round of revisions.
 - **PR updates:** Post a summary to the PR or issue thread (via `gh pr comment` or `gh issue comment`) after each stage.
-- **Subagent cost optimization:** Downgrade information-gathering agents (Explore, web research, context7) to `model: "sonnet"`. Keep the parent session's model for implementation and reasoning agents.
 - **Subagent write boundary:** Subagents in this stage must NOT create, edit, or write any files under `./claude-work/`. Only this parent session writes the output document. Include this constraint in every subagent prompt you compose.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
 - **Follow-up issues, not dismissal:** Pre-existing bugs are not valid grounds for dismissal -- the goal is to leave the codebase in the best working order regardless of bug origin. When a finding is genuinely too complex or out of scope to fix in this PR, file a GitHub issue via `gh issue create` -- never a document-only note. Every stage that surfaces a deferrable finding is responsible for filing it.
+
+## Scope Discipline
+
+The plan must cover the issue end-to-end. Plan the complete feature, not an MVP.
+
+- Every requirement stated in Issue.md must map to a component with full implementation details (function signatures, data structures, edge cases, error paths).
+- "Out of Scope" is for items NOT requested by the issue. It is never a place to defer parts of the requested feature to a follow-up.
+- The only acceptable reason to omit part of the requested feature is that the user explicitly restricted scope during /issue-workflow:interview, and that restriction is recorded in Interview.md. If you find yourself wanting to defer something to a follow-up issue while drafting the plan, signal `interview` (Step 5 Escalate) and get the user's explicit decision first -- do not silently shrink the scope.
+- "Minimum viable", "MVP", "phase 1 / phase 2", and "stub for now, implement later" framing is not acceptable in this document unless the user chose it.
 
 ## Context
 - **Issue number:** $0 (numeric GitHub issue ID -- not a title, keyword, or topic name)
@@ -35,7 +43,7 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 
 Read `Issue.md`, `Research.md`, and `Interview.md` in full. Cross-reference the interview decisions against the research options to confirm everything is consistent.
 
-If needed, use Explore agents to do targeted codebase lookups to fill gaps for the plan. Launch Explore agents with `model: "sonnet"` -- they are gathering information, not designing the plan.
+If needed, use Explore agents to do targeted codebase lookups to fill gaps for the plan.
 
 ### Step 2: Draft the Plan
 
@@ -89,7 +97,9 @@ After all components are complete, these checks validate the entire implementati
 Known risks and how the plan accounts for them.
 
 ## Out of Scope
-Things explicitly NOT included in this plan (to set clear boundaries). Items listed here that represent known bugs, risks, or tech debt are to be filed as follow-up GitHub issues during the review stage's issue-creation step (Step 5a of /issue-workflow:review) -- not left as document-only notes.
+Things explicitly NOT included in this plan (to set clear boundaries). Only list items that fall outside the issue's stated requirements OR that the user explicitly cut from scope during interview. Do not use this section to defer parts of the requested feature to a follow-up issue.
+
+Items listed here that represent known bugs, risks, or tech debt are to be filed as follow-up GitHub issues during the review stage's issue-creation step (Step 5a of /issue-workflow:review) -- not left as document-only notes.
 ```
 
 ### Step 3: Write Plan.md and Commit
