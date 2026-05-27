@@ -98,16 +98,26 @@ Follow the execution order from the plan. For each batch of parallelizable remed
 
 ### Step 3: Run /code-review Cleanup
 
-After all remediations are applied, run the `/code-review` skill as a final cleanup pass on the changes made:
+After all remediations are applied, run `/code-review --fix` as a final cleanup pass on the changes made.
 
-1. Get the list of files changed during remediation:
+`/code-review` is a sub-skill that returns control to you when it finishes. **Returning from `/code-review` is NOT the end of this stage.** Steps 4-7 below are mandatory and must still run after `/code-review` completes. Specifically: GitHub issues from the remediation plan are not yet created, Remediation.md has not been written, nothing has been committed, and no PR comment has been posted. Do not declare the stage done or hand control back to the orchestrator until Step 7 finishes.
+
+1. Capture the pre-review file list:
+   ```bash
+   git diff --name-only HEAD > /tmp/pre-codereview-files-$0.txt
+   ```
+
+2. Invoke the skill: `/code-review --fix`. The `--fix` flag applies the findings to the working tree -- without it, the skill only reports.
+
+3. When control returns, capture what changed:
    ```bash
    git diff --name-only HEAD
    ```
+   Compare against the pre-review list to identify files `/code-review` modified. Note any summary the skill emitted.
 
-2. Invoke `/code-review` to review the changed code for reuse, quality, and efficiency, and fix any issues found.
+4. Record these results for inclusion in Step 5's Remediation.md write -- specifically the "Code Review Pass" section. If `/code-review` made no changes, record "No changes recommended."
 
-3. Record what `/code-review` changed (if anything).
+5. **Continue immediately to Step 4 (Create GitHub Issues).** Do not stop, do not summarize back to the user, do not commit yet -- the stage is not complete until Step 7 finishes.
 
 ### Step 4: Create GitHub Issues
 

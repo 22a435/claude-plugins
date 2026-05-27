@@ -79,16 +79,26 @@ Follow the execution order from the plan. For each batch of parallelizable compo
 
 ### Step 3: Code Review Pass
 
-After all components are implemented and verified, run `/code-review` as a cleanup pass on the changed code. **Skip this step entirely if any component failed verification** -- there is no point reviewing code that will change during a debug cycle.
+After all components are implemented and verified, run `/code-review --fix` as a cleanup pass on the changed code. **Skip this step entirely if any component failed verification** -- there is no point reviewing code that will change during a debug cycle.
 
-1. Get the list of files changed during execution:
+`/code-review` is a sub-skill that returns control to you when it finishes. **Returning from `/code-review` is NOT the end of this stage.** Steps 4 and 5 below are mandatory and must still run after `/code-review` completes. Do not declare the stage done, do not skip writing Execute.md, do not skip the commit/push, and do not post the PR comment until Step 5.
+
+1. Capture the pre-review file list:
+   ```bash
+   git diff --name-only HEAD > /tmp/pre-codereview-files-$0.txt
+   ```
+
+2. Invoke the skill: `/code-review --fix`. The `--fix` flag applies the findings to the working tree -- without it, the skill only reports.
+
+3. When control returns, capture what changed:
    ```bash
    git diff --name-only HEAD
    ```
+   Compare against the pre-review list to identify files `/code-review` modified. Note any summary the skill emitted.
 
-2. Invoke `/code-review` to review the changed code for reuse, quality, and efficiency, and fix any issues found.
+4. Record these results for inclusion in Step 4's Execute.md write -- specifically the "Code Review Pass" section. If `/code-review` made no changes, record "No changes recommended."
 
-3. Record what `/code-review` changed (if anything) for inclusion in Execute.md.
+5. **Continue immediately to Step 4.** Do not stop, do not summarize back to the user, do not commit yet -- the stage is not complete until Step 5 finishes.
 
 ### Step 4: Write Execute.md
 
