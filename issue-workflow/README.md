@@ -63,14 +63,14 @@ setup -> research <-> interview <-> plan -> execute <-> debug <-> verify <-> rev
 | Stage | Model (default) | Purpose |
 |-------|----------------|---------|
 | **setup** | haiku | Create branch, work folder, Issue.md; run repo setup scripts |
-| **research** | opus[1m] | Deep codebase, web, and library documentation investigation |
-| **interview** | opus[1m] | Resolve open questions with user input |
-| **plan** | opus[1m] | Draft implementation plan; requires user approval; opens draft PR |
+| **research** | fable[1m] | Deep codebase, web, and library documentation investigation |
+| **interview** | fable[1m] | Resolve open questions with user input |
+| **plan** | fable[1m] | Draft implementation plan; requires user approval; opens draft PR |
 | **execute** | sonnet[1m] | Implement the plan with parallel subagents |
-| **debug** | opus[1m] | Root cause analysis and fix for escalated problems |
+| **debug** | fable[1m] | Root cause analysis and fix for escalated problems |
 | **verify** | sonnet[1m] | Full verification suite (component + integration + tests) |
 | **review** | sonnet[1m] | Code quality, security, and documentation review |
-| **integrate** | opus[1m] | Rebase onto main; resolve conflicts |
+| **integrate** | fable[1m] | Rebase onto main; resolve conflicts |
 
 ### State Machine
 

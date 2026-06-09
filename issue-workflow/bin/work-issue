@@ -95,18 +95,18 @@ declare -A STAGE_DOC=(
 
 # ── Model assignments (configurable via env vars) ─────────────────
 # Override all stages: ISSUE_WORKFLOW_MODEL=sonnet
-# Override one stage: ISSUE_WORKFLOW_MODEL_RESEARCH=opus[1m]
+# Override one stage: ISSUE_WORKFLOW_MODEL_RESEARCH=fable[1m]
 # Per-stage env var takes precedence over the global override.
 declare -A STAGE_MODEL=(
   [setup]="${ISSUE_WORKFLOW_MODEL_SETUP:-${ISSUE_WORKFLOW_MODEL:-haiku}}"
-  [research]="${ISSUE_WORKFLOW_MODEL_RESEARCH:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [interview]="${ISSUE_WORKFLOW_MODEL_INTERVIEW:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [plan]="${ISSUE_WORKFLOW_MODEL_PLAN:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [execute]="${ISSUE_WORKFLOW_MODEL_EXECUTE:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [debug]="${ISSUE_WORKFLOW_MODEL_DEBUG:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [verify]="${ISSUE_WORKFLOW_MODEL_VERIFY:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [review]="${ISSUE_WORKFLOW_MODEL_REVIEW:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [integrate]="${ISSUE_WORKFLOW_MODEL_INTEGRATE:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
+  [research]="${ISSUE_WORKFLOW_MODEL_RESEARCH:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
+  [interview]="${ISSUE_WORKFLOW_MODEL_INTERVIEW:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
+  [plan]="${ISSUE_WORKFLOW_MODEL_PLAN:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
+  [execute]="${ISSUE_WORKFLOW_MODEL_EXECUTE:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
+  [debug]="${ISSUE_WORKFLOW_MODEL_DEBUG:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
+  [verify]="${ISSUE_WORKFLOW_MODEL_VERIFY:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
+  [review]="${ISSUE_WORKFLOW_MODEL_REVIEW:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
+  [integrate]="${ISSUE_WORKFLOW_MODEL_INTEGRATE:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
 )
 
 # ── Effort assignments (configurable via env vars) ────────────────
@@ -139,7 +139,7 @@ post-execution stages can loop back to verify.
 
 Options:
   --effort <level>   Effort level: high, xhigh (default), or max
-  --model <model>    Override model for all stages (e.g., sonnet, opus[1m])
+  --model <model>    Override model for all stages (e.g., sonnet, fable[1m])
   --resume <stage>   Resume from a specific stage (skips prior stages)
   --help             Show this help message
 

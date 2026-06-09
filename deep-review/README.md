@@ -6,7 +6,7 @@ A Claude Code plugin that orchestrates comprehensive codebase reviews through a 
 
 The `deep-review` CLI launches sequential Claude Code sessions, one per stage. Unlike issue-workflow (which reviews changes relative to a branch), deep-review examines the **entire codebase** -- architecture, security, code quality, documentation, dependencies, and more.
 
-The review stage is the core: it launches up to 10 specialized sub-reviewer agents in parallel, each analyzing the codebase from a different perspective. An opus-level parent session synthesizes all findings into a comprehensive review document. The remediation stage then applies approved fixes and creates GitHub issues for complex items.
+The review stage is the core: it launches up to 10 specialized sub-reviewer agents in parallel, each analyzing the codebase from a different perspective. A fable-level parent session synthesizes all findings into a comprehensive review document. The remediation stage then applies approved fixes and creates GitHub issues for complex items.
 
 ## Prerequisites
 
@@ -48,7 +48,7 @@ deep-review --effort max
 deep-review --resume review --session 3
 
 # Override model for all stages
-deep-review --model opus[1m]
+deep-review --model fable[1m]
 ```
 
 ## Stages
@@ -62,17 +62,17 @@ The `plan-sc-audit` and `run-sc-audit` stages are conditional -- they only run f
 | Stage | Model (default) | Purpose |
 |-------|----------------|---------|
 | **setup** | haiku | Create branch, session folder; run repo setup scripts |
-| **context-building** | opus[1m] | Analyze project structure, tech stack, discover and recommend review tools |
-| **interview** | opus[1m] | Resolve ambiguities, approve tools, set review priorities |
+| **context-building** | fable[1m] | Analyze project structure, tech stack, discover and recommend review tools |
+| **interview** | fable[1m] | Resolve ambiguities, approve tools, set review priorities |
 | **update-tooling** | sonnet[1m] | Install approved tools, persist to repo setup scripts |
-| **plan-sc-audit** | opus[1m] | Configure sc-auditor for smart contract analysis (conditional) |
-| **run-sc-audit** | opus[1m] | Execute sc-auditor security audit (conditional) |
-| **plan** | opus[1m] | Draft comprehensive review plan; requires user approval |
-| **review** | opus[1m] | Deep review with up to 10 parallel sub-reviewers |
-| **remediation-plan** | opus[1m] | Prioritize fixes and issues; requires user approval |
+| **plan-sc-audit** | fable[1m] | Configure sc-auditor for smart contract analysis (conditional) |
+| **run-sc-audit** | fable[1m] | Execute sc-auditor security audit (conditional) |
+| **plan** | fable[1m] | Draft comprehensive review plan; requires user approval |
+| **review** | fable[1m] | Deep review with up to 10 parallel sub-reviewers |
+| **remediation-plan** | fable[1m] | Prioritize fixes and issues; requires user approval |
 | **remediation** | sonnet[1m] | Apply fixes, create issues, run /code-review cleanup |
 | **verify** | sonnet[1m] | Verify remediations match plan and code |
-| **integrate** | opus[1m] | Prepare branch for merge; rebase onto main if needed |
+| **integrate** | fable[1m] | Prepare branch for merge; rebase onto main if needed |
 
 ### State Machine
 

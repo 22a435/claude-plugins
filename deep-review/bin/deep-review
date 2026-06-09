@@ -110,21 +110,21 @@ declare -A STAGE_DOC=(
 
 # ── Model assignments (configurable via env vars) ─────────────────
 # Override all stages: DEEP_REVIEW_MODEL=sonnet
-# Override one stage: DEEP_REVIEW_MODEL_REVIEW=opus[1m]
+# Override one stage: DEEP_REVIEW_MODEL_REVIEW=fable[1m]
 # Per-stage env var takes precedence over the global override.
 declare -A STAGE_MODEL=(
   [setup]="${DEEP_REVIEW_MODEL_SETUP:-${DEEP_REVIEW_MODEL:-haiku}}"
-  [context-building]="${DEEP_REVIEW_MODEL_CONTEXT_BUILDING:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
-  [interview]="${DEEP_REVIEW_MODEL_INTERVIEW:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
-  [update-tooling]="${DEEP_REVIEW_MODEL_UPDATE_TOOLING:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
-  [plan-sc-audit]="${DEEP_REVIEW_MODEL_PLAN_SC_AUDIT:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
-  [run-sc-audit]="${DEEP_REVIEW_MODEL_RUN_SC_AUDIT:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
-  [plan]="${DEEP_REVIEW_MODEL_PLAN:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
-  [review]="${DEEP_REVIEW_MODEL_REVIEW:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
-  [remediation-plan]="${DEEP_REVIEW_MODEL_REMEDIATION_PLAN:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
-  [remediation]="${DEEP_REVIEW_MODEL_REMEDIATION:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
-  [verify]="${DEEP_REVIEW_MODEL_VERIFY:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
-  [integrate]="${DEEP_REVIEW_MODEL_INTEGRATE:-${DEEP_REVIEW_MODEL:-opus[1m]}}"
+  [context-building]="${DEEP_REVIEW_MODEL_CONTEXT_BUILDING:-${DEEP_REVIEW_MODEL:-fable[1m]}}"
+  [interview]="${DEEP_REVIEW_MODEL_INTERVIEW:-${DEEP_REVIEW_MODEL:-fable[1m]}}"
+  [update-tooling]="${DEEP_REVIEW_MODEL_UPDATE_TOOLING:-${DEEP_REVIEW_MODEL:-fable[1m]}}"
+  [plan-sc-audit]="${DEEP_REVIEW_MODEL_PLAN_SC_AUDIT:-${DEEP_REVIEW_MODEL:-fable[1m]}}"
+  [run-sc-audit]="${DEEP_REVIEW_MODEL_RUN_SC_AUDIT:-${DEEP_REVIEW_MODEL:-fable[1m]}}"
+  [plan]="${DEEP_REVIEW_MODEL_PLAN:-${DEEP_REVIEW_MODEL:-fable[1m]}}"
+  [review]="${DEEP_REVIEW_MODEL_REVIEW:-${DEEP_REVIEW_MODEL:-fable[1m]}}"
+  [remediation-plan]="${DEEP_REVIEW_MODEL_REMEDIATION_PLAN:-${DEEP_REVIEW_MODEL:-fable[1m]}}"
+  [remediation]="${DEEP_REVIEW_MODEL_REMEDIATION:-${DEEP_REVIEW_MODEL:-fable[1m]}}"
+  [verify]="${DEEP_REVIEW_MODEL_VERIFY:-${DEEP_REVIEW_MODEL:-fable[1m]}}"
+  [integrate]="${DEEP_REVIEW_MODEL_INTEGRATE:-${DEEP_REVIEW_MODEL:-fable[1m]}}"
 )
 
 # ── Effort assignments (configurable via env vars) ────────────────
@@ -160,7 +160,7 @@ the review stage can self-loop for deeper investigation.
 
 Options:
   --effort <level>   Effort level: high, xhigh (default), or max
-  --model <model>    Override model for all stages (e.g., sonnet, opus[1m])
+  --model <model>    Override model for all stages (e.g., sonnet, fable[1m])
   --resume <stage>   Resume from a specific stage (requires --session)
   --session <N>      Use a specific session number (auto-increments if omitted)
   --help             Show this help message
@@ -206,7 +206,7 @@ Auto-update:
 Examples:
   deep-review                              # New review session
   deep-review --effort max                 # Use max effort level
-  deep-review --model opus[1m]             # Use opus for all stages
+  deep-review --model fable[1m]             # Use fable for all stages
   deep-review --resume plan --session 3    # Resume session 3 from planning
   deep-review --resume review --session 1  # Re-run review for session 1
 EOF

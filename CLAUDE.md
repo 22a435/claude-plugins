@@ -70,7 +70,7 @@ SKILL.md files are prompt templates loaded by Claude Code when the skill is invo
 Skill conventions:
 - **Document ownership:** Each stage reads prior documents, writes only its own output document. Re-triggered stages append, never overwrite.
 - **Subagent write boundary:** Subagents must NOT write to the work directory -- only the parent session writes output documents.
-- **Subagent cost optimization:** Information-gathering agents use `model: "sonnet"`. Parent sessions (opus) handle synthesis.
+- **Subagent cost optimization:** Information-gathering agents use `model: "sonnet"`. Parent sessions (fable) handle synthesis.
 - **Commit format:** `claude-work(<stage>): <desc> [#<issue>]` (issue-workflow) or `claude-review(<stage>): <desc> [session #<N>]` (deep-review)
 
 ### Hooks
