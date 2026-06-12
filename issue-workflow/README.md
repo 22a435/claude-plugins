@@ -66,11 +66,11 @@ setup -> research <-> interview <-> plan -> execute <-> debug <-> verify <-> rev
 | **research** | fable[1m] | Deep codebase, web, and library documentation investigation |
 | **interview** | fable[1m] | Resolve open questions with user input |
 | **plan** | fable[1m] | Draft implementation plan; requires user approval; opens draft PR |
-| **execute** | sonnet[1m] | Implement the plan with parallel subagents |
+| **execute** | opus[1m] | Implement the plan with parallel subagents |
 | **debug** | fable[1m] | Root cause analysis and fix for escalated problems |
-| **verify** | sonnet[1m] | Full verification suite (component + integration + tests) |
-| **review** | sonnet[1m] | Code quality, security, and documentation review |
-| **integrate** | fable[1m] | Rebase onto main; resolve conflicts |
+| **verify** | opus[1m] | Full verification suite (component + integration + tests) |
+| **review** | opus[1m] | Code quality, security, and documentation review |
+| **integrate** | opus[1m] | Rebase onto main; resolve conflicts |
 
 ### State Machine
 
