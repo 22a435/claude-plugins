@@ -11,6 +11,11 @@
       "name": "deep-review",
       "source": "./deep-review",
       "description": "9-stage deep codebase review with parallel sub-reviewers and automated remediation"
+    },
+    {
+      "name": "triage",
+      "source": "./triage",
+      "description": "Issue triage workflow: consolidates open issues and in-code TODOs into a small set of well-scoped, dependency-aware issues ready for the issue workflow"
     }
   ]
 }

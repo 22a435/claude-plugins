@@ -20,7 +20,8 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 - **PR updates:** Post a summary to the PR thread (via `gh pr comment`) after each stage.
 - **Subagent write boundary:** Subagents in this stage must NOT create, edit, or write any files under `./claude-work/`. Only this parent session writes the output document. Include this constraint in every subagent prompt you compose.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
-- **Follow-up issues, not dismissal:** Pre-existing bugs are not valid grounds for dismissal -- the goal is to leave the codebase in the best working order regardless of bug origin. When a finding is genuinely too complex or out of scope to fix in this PR, file a GitHub issue via `gh issue create` -- never a document-only note. Every stage that surfaces a deferrable finding is responsible for filing it.
+- **Deferral hierarchy (never silently drop, never over-file):** Pre-existing bugs are not grounds for dismissal -- leave the codebase in the best working order regardless of origin. When work surfaces that you will not finish in this PR, walk this hierarchy and stop at the first tier that fits: **(1) Fix it in this PR** -- the default, and hard; "complex", "tedious", "touches many files", or "would take a while" are NOT reasons to defer, only a genuine Create-Issue criterion is (a tradeoff the user must decide / architectural refactor / high blast radius / team discussion / breaking upgrade / benchmark-needed). **(2) Append to a follow-up already filed in this run** -- if a follow-up you filed (or will file) this run naturally covers it, add it there rather than opening a second issue. **(3) Append to an existing open backlog issue** -- before filing anything new, search the backlog (`gh issue list --state open --limit 200 --json number,title,labels,body`); if an open issue already covers the area, comment the new context onto it instead of creating a duplicate. **(4) File one new, bundled issue** -- only if no tier above fits; bundle every co-deferred finding from this run that shares a subsystem or design decision into the SAME issue (one well-scoped issue, never one-per-finding). Filing a follow-up is a commitment that the proper fix exceeds this PR's scope -- not a way to avoid work; never leave a deferred finding as a document-only note, and record which tier each deferral took and why.
+- **Read issues in full:** When you read a GitHub issue, read the *entire* thread -- the body **and every comment/reply** -- plus any linked issues, PRs, commits, or docs that look relevant. Critical scope and context often live in replies, not the original body; missing them causes under-scoped work. Treat the whole thread as the source of truth for what the issue actually asks.
 
 ## Context
 - **Issue number:** $0 (numeric GitHub issue ID -- not a title, keyword, or topic name)
@@ -92,7 +93,12 @@ If any verification check fails:
 - **(a) Route to `debug` to fix it now.** This is the default. The goal is to leave the codebase in the best working order regardless of bug origin.
 - **(b) File a follow-up issue and mark the row `DEFERRED-ISSUE #<n>`.** Only valid if the proper fix meets the Create-Issue criteria (tradeoffs the user should decide, architectural refactoring, high blast radius, team discussion, breaking upgrades, or benchmark-needed performance work) AND is truly out of scope for this PR. Option (b) requires explicit rationale in Verify.md; it is not the default.
 
-To file a follow-up issue:
+To file a follow-up, apply the **Deferral hierarchy** (Workflow Context) -- search the backlog and prefer appending before creating:
+
+```bash
+gh issue list --state open --limit 200 --json number,title,labels,body > /tmp/backlog-$0.json
+```
+If an open issue already covers this failure's area, append the context with `gh issue comment <existing-#> --body "..."` instead of opening a duplicate. Only if none fits, create one (bundling co-deferred failures that share a subsystem):
 
 ```bash
 gh issue create \
@@ -101,7 +107,7 @@ gh issue create \
   --label "followup,from-pr-#<pr-number>"
 ```
 
-Record the issue number and URL in Verify.md's "Follow-up Issues Created" section. In the "Failures Requiring Debug" table, annotate deferred rows as `DEFERRED-ISSUE #<n>` instead of leaving them as plain failures.
+Record the issue number and URL (and tier: appended to #n / new #n) in Verify.md's "Follow-up Issues Created" section. In the "Failures Requiring Debug" table, annotate deferred rows as `DEFERRED-ISSUE #<n>` instead of leaving them as plain failures.
 
 If all remaining failures are deferred and there is nothing left for `debug` to investigate, the default transition to `debug` should be replaced by advancing to `review` -- but mark verify status as FAIL in the summary so the review stage sees the deferred context.
 
@@ -150,6 +156,7 @@ For each failure, provide enough context for the debug stage to investigate with
 
 ### Issue #<n>: <title>
 - **URL:** <gh url>
+- **Tier:** <new issue | appended to existing #n>
 - **Source failure:** <which check, quoted error>
 - **Why deferred:** <criterion: tradeoff / architecture / blast radius / team-discussion / breaking-upgrade / benchmark-needed / out-of-scope>
 - **Mitigation applied in this PR:** <yes -- describe | no>

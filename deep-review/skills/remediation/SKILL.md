@@ -20,6 +20,8 @@ This skill is one stage of a multi-stage deep review workflow orchestrated by th
 - **PR updates:** Post a summary to the PR thread (via `gh pr comment`) after completing the stage.
 - **Code changes:** This is the ONLY stage that edits source code and documentation in the repository (along with update-tooling for setup scripts). Apply changes carefully and verify each one.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
+- **Deferral hierarchy (never silently drop, never over-file):** Pre-existing bugs are not grounds for dismissal -- leave the codebase in the best working order regardless of origin. When work surfaces that you will not finish in this PR, walk this hierarchy and stop at the first tier that fits: **(1) Fix it in this PR** -- the default, and hard; "complex", "tedious", "touches many files", or "would take a while" are NOT reasons to defer, only a genuine Create-Issue criterion is (a tradeoff the user must decide / architectural refactor / high blast radius / team discussion / breaking upgrade / benchmark-needed). **(2) Append to a follow-up already filed in this run** -- if a follow-up you filed (or will file) this run naturally covers it, add it there rather than opening a second issue. **(3) Append to an existing open backlog issue** -- before filing anything new, search the backlog (`gh issue list --state open --limit 200 --json number,title,labels,body`); if an open issue already covers the area, comment the new context onto it instead of creating a duplicate. **(4) File one new, bundled issue** -- only if no tier above fits; bundle every co-deferred finding from this run that shares a subsystem or design decision into the SAME issue (one well-scoped issue, never one-per-finding). Filing a follow-up is a commitment that the proper fix exceeds this PR's scope -- not a way to avoid work; never leave a deferred finding as a document-only note, and record which tier each deferral took and why.
+- **Read issues in full:** When you read a GitHub issue, read the *entire* thread -- the body **and every comment/reply** -- plus any linked issues, PRs, commits, or docs that look relevant. Critical scope and context often live in replies, not the original body; missing them causes under-scoped work. Treat the whole thread as the source of truth for what the issue actually asks.
 
 ## Completeness Requirement
 
@@ -119,25 +121,30 @@ After all remediations are applied, run `/code-review --fix` as a final cleanup 
 
 5. **Continue immediately to Step 4 (Create GitHub Issues).** Do not stop, do not summarize back to the user, do not commit yet -- the stage is not complete until Step 7 finishes.
 
-### Step 4: Create GitHub Issues
+### Step 4: File GitHub Issues (per the plan's dispositions)
 
-For each "create issue" item in the remediation plan:
+Execute the "Issues to Create" section of the remediation plan exactly as drafted -- it has already applied the Deferral hierarchy (bundled findings, marked appends vs new issues). Do not re-expand a bundle into one-issue-per-finding.
 
-```bash
-gh issue create \
-  --title "<proposed title from plan>" \
-  --body "<description with full context from review findings>" \
-  --label "<labels from plan>"
-```
+- For an entry marked **append to existing #n**, add the context to that issue instead of creating a duplicate:
+  ```bash
+  gh issue comment <n> --body "<description + relevant findings + 'Surfaced in deep review session #<N>. See Review.md on the review branch.'>"
+  ```
+- For an entry marked **new bundled issue**, create it:
+  ```bash
+  gh issue create \
+    --title "<proposed title from plan>" \
+    --body "<description with full context from review findings>" \
+    --label "<labels from plan>"
+  ```
 
-The issue body should include:
-- Description of the problem/opportunity
+Each new issue's body should include:
+- Description of the problem(s)/opportunity -- if the issue bundles several findings, list each as a checklist item so it reads as one scope of work
 - Relevant findings from the review (quote specific sections)
 - Suggested approach (if the review provided one)
 - Reference to the review session: `Identified in deep review session #<N>`
 - Link to the Review.md file on the review branch
 
-Record the created issue number and URL.
+If a finding's disposition was not pre-decided in the plan (e.g., a new finding surfaced during remediation), apply the Deferral hierarchy yourself before filing: search the backlog (`gh issue list --state open --limit 200 --json number,title,labels,body`) and prefer appending. Record each created/append issue number and URL (and which disposition it took).
 
 ### Step 5: Write Remediation.md
 

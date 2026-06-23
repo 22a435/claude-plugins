@@ -20,7 +20,8 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 - **PR updates:** Post a summary to the PR thread (via `gh pr comment`) after each stage.
 - **Subagent write boundary:** Subagents in this stage must NOT create, edit, or write any files under `./claude-work/`. Only this parent session writes the output document. Include this constraint in every subagent prompt you compose.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
-- **Follow-up issues, not dismissal:** Pre-existing bugs are not valid grounds for dismissal -- the goal is to leave the codebase in the best working order regardless of bug origin. When a finding is genuinely too complex or out of scope to fix in this PR, file a GitHub issue via `gh issue create` -- never a document-only note. Every stage that surfaces a deferrable finding is responsible for filing it.
+- **Deferral hierarchy (never silently drop, never over-file):** Pre-existing bugs are not grounds for dismissal -- leave the codebase in the best working order regardless of origin. When work surfaces that you will not finish in this PR, walk this hierarchy and stop at the first tier that fits: **(1) Fix it in this PR** -- the default, and hard; "complex", "tedious", "touches many files", or "would take a while" are NOT reasons to defer, only a genuine Create-Issue criterion is (a tradeoff the user must decide / architectural refactor / high blast radius / team discussion / breaking upgrade / benchmark-needed). **(2) Append to a follow-up already filed in this run** -- if a follow-up you filed (or will file) this run naturally covers it, add it there rather than opening a second issue. **(3) Append to an existing open backlog issue** -- before filing anything new, search the backlog (`gh issue list --state open --limit 200 --json number,title,labels,body`); if an open issue already covers the area, comment the new context onto it instead of creating a duplicate. **(4) File one new, bundled issue** -- only if no tier above fits; bundle every co-deferred finding from this run that shares a subsystem or design decision into the SAME issue (one well-scoped issue, never one-per-finding). Filing a follow-up is a commitment that the proper fix exceeds this PR's scope -- not a way to avoid work; never leave a deferred finding as a document-only note, and record which tier each deferral took and why.
+- **Read issues in full:** When you read a GitHub issue, read the *entire* thread -- the body **and every comment/reply** -- plus any linked issues, PRs, commits, or docs that look relevant. Critical scope and context often live in replies, not the original body; missing them causes under-scoped work. Treat the whole thread as the source of truth for what the issue actually asks.
 
 ## Context
 - **Issue number:** $0 (numeric GitHub issue ID -- not a title, keyword, or topic name)
@@ -150,27 +151,35 @@ Route each finding into one of three lanes based on the scope of its proper fix:
 - If a suggestion meets the Create-Issue criteria (e.g., a broader style/architecture cleanup that should not be bundled into this PR), file it as a follow-up issue per Step 5a rather than dropping it
 - Record all decisions
 
-### Step 5a: Create Follow-up Issues
+### Step 5a: File Follow-up Issues (search backlog, bundle, then create)
 
-For every finding routed to Lane B above (and any Lane-C suggestion that meets the Create-Issue criteria), file a real GitHub issue -- do not rely on Review.md alone. Auto-create without asking; the `followup,from-pr-#<pr-number>` label makes spurious ones easy to find and close.
+Every finding routed to Lane B above (and any Lane-C suggestion that meets the Create-Issue criteria) must end up on a real GitHub issue -- do not rely on Review.md alone. But apply the **Deferral hierarchy** from the Workflow Context: do not auto-create one issue per finding. Work the deferred set as a batch:
 
-For each follow-up:
+1. **Search the backlog first.** Pull the open issues once:
+   ```bash
+   gh issue list --state open --limit 200 --json number,title,labels,body > /tmp/backlog-$0.json
+   ```
+   For each deferred finding, check whether an open issue already covers the same area/subsystem. If so, **append** the new context as a comment instead of creating a duplicate:
+   ```bash
+   gh issue comment <existing-#> --body "<finding + why it surfaced during review of PR #<pr-number> for issue #<issue-number>. See ./claude-work/$0/Review.md>"
+   ```
+2. **Bundle the remainder.** Group every genuinely-new finding that shares a subsystem or a design decision into the SAME new issue -- one well-scoped, single-PR-sized issue per cluster, never one-per-finding. Only split into multiple new issues when the clusters are genuinely independent (could be worked in parallel with no shared decision).
+3. **Create the bundled issue(s).** Auto-create without asking; the `followup,from-pr-#<pr-number>` label makes spurious ones easy to find and close:
+   ```bash
+   gh issue create \
+     --title "<concise title describing the cluster>" \
+     --body "<body content per template below>" \
+     --label "followup,from-pr-#<pr-number>"
+   ```
 
-```bash
-gh issue create \
-  --title "<concise title describing the problem>" \
-  --body "<body content per template below>" \
-  --label "followup,from-pr-#<pr-number>"
-```
-
-The issue body must include:
-- **Description** of the problem or opportunity
-- **Exact finding** quoted from Review.md (so future readers see the original context)
+Each new issue's body must include:
+- **Description** of the problem(s) or opportunity -- if the issue bundles several findings, list each as a checklist item so the bundle is clearly one scope of work
+- **Exact finding(s)** quoted from Review.md (so future readers see the original context)
 - **Suggested approach** if one is known (otherwise note "approach TBD")
 - **Why deferred**: which Create-Issue criterion applies (tradeoff / architecture / blast radius / team discussion / breaking upgrade / benchmark-needed / out-of-scope)
 - **Cross-reference** line: `Identified during review of PR #<pr-number> for issue #<issue-number>. See ./claude-work/<issue>/Review.md` (use `gh pr view --json number` to get the PR number if unknown)
 
-Capture the returned issue number and URL for each created issue. Record them in Review.md's "Follow-up Issues Created" section (see Step 7).
+Capture the returned issue number and URL (and any existing-issue numbers you appended to). Record them in Review.md's "Follow-up Issues Created" section (see Step 7), noting for each finding which hierarchy tier it took (appended to #n / new bundled #n).
 
 **Reminder -- when to file, when to fix:** The Create-Issue criteria are narrow on purpose. If a Critical/Important finding is a bounded bug fix -- even a hairy one -- it goes to `debug`, not to a follow-up issue. Filing a follow-up is a commitment that the *proper* fix exceeds this PR's scope, not a way to avoid work.
 
@@ -209,11 +218,12 @@ Do NOT implement Critical or Important findings -- those are handled by the debu
 
 ## Follow-up Issues Created
 
-<One subsection per issue filed in Step 5a. If none were filed, write the single line: "None -- all findings were either fixed or routed to debug.">
+<One subsection per issue touched in Step 5a -- both newly-created bundles and existing issues you appended to. If none were filed, write the single line: "None -- all findings were either fixed or routed to debug.">
 
 ### Issue #<n>: <title>
 - **URL:** <gh url>
-- **Source finding:** <quote or section reference back to Review Findings above>
+- **Tier:** <new bundled issue | appended to existing #n>
+- **Source finding(s):** <quote or section reference back to Review Findings above -- list all findings bundled here>
 - **Why deferred:** <criterion: tradeoff / architecture / blast radius / team-discussion / breaking-upgrade / benchmark-needed / out-of-scope>
 - **Mitigation applied in this PR:** <yes -- describe | no>
 
