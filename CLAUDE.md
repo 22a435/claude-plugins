@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Is
 
-A Claude Code plugin marketplace (`22a435-workflows`) containing two plugins that orchestrate autonomous multi-stage workflows by launching sequential Claude Code CLI sessions. Each stage gets a fresh context window with full subagent access.
+A Claude Code plugin marketplace (`22a435-workflows`) containing three plugins that orchestrate autonomous multi-stage workflows by launching sequential Claude Code CLI sessions. Each stage gets a fresh context window with full subagent access.
 
 **Why sequential sessions:** Claude Code subagents cannot spawn sub-subagents. Running each stage as its own top-level `claude` invocation gives every skill maximum parallelism.
 
@@ -28,10 +28,19 @@ Comprehensive codebase review with up to 10 parallel sub-reviewers and automated
 - Stages: `setup -> context-building -> interview <-> update-tooling -> [plan-sc-audit -> run-sc-audit] -> plan -> review -> remediation-plan -> remediation -> verify -> integrate -> done`
 - Conditional stages: `plan-sc-audit` and `run-sc-audit` only run for Solidity projects with sc-auditor approved during interview
 
+### triage
+Backlog consolidation -- the net *consumer* of issues, counterweight to the two net producers above. Reads the open issue set (full comment threads) plus in-code TODOs, closes already-fixed/duplicate issues, and consolidates the rest into a small, loosely-coupled set of well-scoped issues -- each a single-PR "bite" for issue-workflow, with dependent work bundled behind the design decision it hinges on.
+
+- CLI: `triage [--effort high|xhigh|max] [--model <model>] [--resume <stage>] [--session <N>]`
+- Branch: `claude/triage/<session-number>`
+- Work dir: `./claude-triages/<session-number>/`
+- Stages: `setup -> inventory -> reconcile -> cluster -> interview -> consolidate -> verify -> integrate -> done`
+- Approval gate: `interview` presents the full plan; no GitHub issue is closed or created until it is approved. GitHub mutations happen only in `consolidate` (and `verify` salvage).
+
 ## Repository Structure
 
 ```
-.claude-plugin/marketplace.json   # Marketplace manifest listing both plugins
+.claude-plugin/marketplace.json   # Marketplace manifest listing all three plugins
 issue-workflow/
   .claude-plugin/plugin.json      # Plugin metadata + version
   bin/work-issue                  # Bash orchestrator (state machine)
@@ -44,11 +53,17 @@ deep-review/
   hooks/hooks.json
   hooks/check-git-branch.sh
   skills/<stage>/SKILL.md         # Includes plan-sc-audit/ and run-sc-audit/ for sc-auditor integration
+triage/
+  .claude-plugin/plugin.json
+  bin/triage                      # Bash orchestrator (state machine)
+  hooks/hooks.json
+  hooks/check-git-branch.sh
+  skills/<stage>/SKILL.md         # inventory/reconcile/cluster/interview/consolidate/verify/integrate
 ```
 
 ## Architecture
 
-### Orchestrators (`bin/work-issue`, `bin/deep-review`)
+### Orchestrators (`bin/work-issue`, `bin/deep-review`, `bin/triage`)
 
 Pure bash state machines. They:
 1. Parse args, validate environment (`gh`, `claude`, `git`, `jq`)
@@ -71,7 +86,7 @@ Skill conventions:
 - **Document ownership:** Each stage reads prior documents, writes only its own output document. Re-triggered stages append, never overwrite.
 - **Subagent write boundary:** Subagents must NOT write to the work directory -- only the parent session writes output documents.
 - **Subagent cost optimization:** Information-gathering agents use `model: "sonnet"`. Parent sessions (opus) handle synthesis.
-- **Commit format:** `claude-work(<stage>): <desc> [#<issue>]` (issue-workflow) or `claude-review(<stage>): <desc> [session #<N>]` (deep-review)
+- **Commit format:** `claude-work(<stage>): <desc> [#<issue>]` (issue-workflow), `claude-review(<stage>): <desc> [session #<N>]` (deep-review), or `claude-triage(<stage>): <desc> [session #<N>]` (triage)
 
 ### Hooks
 

@@ -20,6 +20,8 @@ This skill is one stage of a multi-stage deep review workflow orchestrated by th
 - **PR updates:** Post a summary to the PR thread (via `gh pr comment`) after completing the stage.
 - **Subagent write boundary:** Subagents must NOT write to `./claude-reviews/`. Only this parent session writes the output document.
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
+- **Deferral hierarchy (never silently drop, never over-file):** Pre-existing bugs are not grounds for dismissal -- leave the codebase in the best working order regardless of origin. When work surfaces that you will not finish in this PR, walk this hierarchy and stop at the first tier that fits: **(1) Fix it in this PR** -- the default, and hard; "complex", "tedious", "touches many files", or "would take a while" are NOT reasons to defer, only a genuine Create-Issue criterion is (a tradeoff the user must decide / architectural refactor / high blast radius / team discussion / breaking upgrade / benchmark-needed). **(2) Append to a follow-up already filed in this run** -- if a follow-up you filed (or will file) this run naturally covers it, add it there rather than opening a second issue. **(3) Append to an existing open backlog issue** -- before filing anything new, search the backlog (`gh issue list --state open --limit 200 --json number,title,labels,body`); if an open issue already covers the area, comment the new context onto it instead of creating a duplicate. **(4) File one new, bundled issue** -- only if no tier above fits; bundle every co-deferred finding from this run that shares a subsystem or design decision into the SAME issue (one well-scoped issue, never one-per-finding). Filing a follow-up is a commitment that the proper fix exceeds this PR's scope -- not a way to avoid work; never leave a deferred finding as a document-only note, and record which tier each deferral took and why.
+- **Read issues in full:** When you read a GitHub issue, read the *entire* thread -- the body **and every comment/reply** -- plus any linked issues, PRs, commits, or docs that look relevant. Critical scope and context often live in replies, not the original body; missing them causes under-scoped work. Treat the whole thread as the source of truth for what the issue actually asks.
 
 ## Fix-Now Bias
 
@@ -67,6 +69,10 @@ For every finding in Review.md, categorize it into one of three buckets:
 - Performance optimizations that require benchmarking to validate
 - "Complex", "tedious", "touches several files", or "would take time" do NOT qualify on their own. If the fix is bounded and well-understood, it belongs in Fix Now even if it is annoying.
 
+Apply the **Deferral hierarchy** (Workflow Context) to this bucket so it produces the *fewest* issues, not one-per-finding:
+- **Search the open backlog first** -- `gh issue list --state open --limit 200 --json number,title,labels,body`. For any "Create Issue" item already covered by an open issue, mark it **append-to-#n** (the remediation stage will comment on that issue rather than open a duplicate).
+- **Bundle the rest** -- collapse every remaining "Create Issue" item that shares a subsystem or design decision into a single proposed issue (one well-scoped, single-PR-sized bite). Only keep items as separate new issues when they are genuinely independent (workable in parallel, no shared decision).
+
 **Skip** -- Items not worth addressing:
 - False positives from automated tools
 - Findings in out-of-scope areas
@@ -102,16 +108,19 @@ Total: <N> fix now, <N> create issue, <N> skip.
 
 ## Issues to Create
 
+<Each entry is either a NEW bundled issue or an APPEND to an existing backlog issue, per the Deferral hierarchy. Bundle related findings -- one entry should cover a whole cluster, not a single finding, unless the clusters are genuinely independent.>
+
 ### Issue 1: <proposed title>
-- **Source finding:** <reference>
-- **Description:** What needs to be done and why
+- **Disposition:** <new bundled issue | append to existing #n>
+- **Source finding(s):** <reference -- list every finding bundled into this issue>
+- **Description:** What needs to be done and why (if multiple findings, list each as a checklist item)
 - **Relevant context:** Key findings that inform this issue
 - **Suggested labels:** bug / enhancement / security / documentation / tech-debt
 - **Priority:** high / medium / low
 - **Estimated effort:** small / medium / large
 
 ### Issue 2: ...
-(continue for all create-issue items)
+(continue for all create-issue clusters)
 
 ## Deferred / Accepted Risk
 

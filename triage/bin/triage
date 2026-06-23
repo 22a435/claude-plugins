@@ -2,22 +2,24 @@
 set -uo pipefail
 
 # ═══════════════════════════════════════════════════════════════════
-# work-issue - Claude Code autonomous workflow orchestrator
+# triage - Claude Code issue triage / consolidation orchestrator
 # ═══════════════════════════════════════════════════════════════════
-# Usage: work-issue <issue-number> [--effort high|xhigh|max] [--model <model>] [--resume <stage>]
+# Usage: triage [--effort high|xhigh|max] [--model <model>] [--resume <stage>] [--session <N>]
 #
-# Orchestrates a full issue-to-PR workflow by launching sequential
-# Claude Code sessions, each with a dedicated skill and fresh context.
+# Reads the open GitHub issues and in-code TODOs, closes the ones that
+# are already fixed or duplicated, and consolidates the rest into a
+# small, loosely-coupled set of well-scoped issues -- each a single-PR
+# bite for the issue workflow. Nothing is mutated on GitHub until the
+# full plan is approved in the interview stage.
 #
-# Stages run as a state machine, not a rigid sequence. Pre-execution
-# stages (research/interview/plan) can loop freely. Post-execution
-# stages (verify/review/integrate) can loop back to verify. A hard
-# wall separates planning from execution.
+# Stages run as a state machine. Pre-consolidate stages can loop freely.
+# The interview stage is a whole-plan approval gate: no issue is closed
+# or created before the user approves the plan.
 #
 # Skills request non-default transitions by writing a stage name to
-# ./claude-work/<issue>/.next-stage
+# ./claude-triages/<session>/.next-stage
 #
-# Part of the issue-workflow plugin for Claude Code.
+# Part of the triage plugin for Claude Code.
 # https://github.com/22a435/claude-plugins
 # ═══════════════════════════════════════════════════════════════════
 
@@ -26,149 +28,142 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 PLUGIN_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # ── Valid stages (for --resume validation) ────────────────────────
-readonly ALL_STAGES=(setup research interview plan execute debug verify review integrate)
+readonly ALL_STAGES=(setup inventory reconcile cluster interview consolidate verify integrate)
 
 # ── Transition rules ──────────────────────────────────────────────
 # Each stage maps to its space-delimited list of allowed next stages.
 declare -A ALLOWED_TRANSITIONS=(
-  [setup]="research"
-  [research]="interview research"
-  [interview]="plan research interview"
-  [plan]="execute research interview plan"
-  [execute]="verify debug"
-  [debug]="execute verify review"
-  [verify]="review verify debug"
-  [review]="integrate verify review debug"
+  [setup]="inventory"
+  [inventory]="reconcile inventory"
+  [reconcile]="cluster inventory reconcile"
+  [cluster]="interview reconcile cluster"
+  [interview]="consolidate cluster reconcile interview"
+  [consolidate]="verify consolidate"
+  [verify]="integrate consolidate verify"
   [integrate]="verify integrate done"
 )
 
 declare -A DEFAULT_NEXT=(
-  [setup]="research"
-  [research]="interview"
-  [interview]="plan"
-  [plan]="execute"
-  [execute]="verify"
-  [debug]="verify"
-  [verify]="review"
-  [review]="integrate"
-  [integrate]="verify"
+  [setup]="inventory"
+  [inventory]="reconcile"
+  [reconcile]="cluster"
+  [cluster]="interview"
+  [interview]="consolidate"
+  [consolidate]="verify"
+  [verify]="integrate"
+  [integrate]="done"
 )
 
 declare -A STAGE_DESC=(
-  [setup]="Branch, work folder, Issue.md, and environment init"
-  [research]="Deep investigation of the issue"
-  [interview]="Resolve open questions with user"
-  [plan]="Draft and approve implementation plan"
-  [execute]="Implement the plan"
-  [debug]="Root cause analysis and fix for escalated problems"
-  [verify]="Full verification suite"
-  [review]="Code quality review"
-  [integrate]="Prepare branch for merge"
+  [setup]="Branch, session folder, Session.md, draft PR, and environment init"
+  [inventory]="Read every open issue (full threads) and in-code TODOs"
+  [reconcile]="Classify each item: already-fixed / duplicate / still-live"
+  [cluster]="Build the dependency graph and consolidate into bundles"
+  [interview]="Present the full triage plan for approval (no mutations yet)"
+  [consolidate]="Apply approved closes/merges/new issues on GitHub"
+  [verify]="Confirm GitHub state matches the approved plan"
+  [integrate]="Prepare report branch for merge"
 )
 
 # ── Skill invocations ─────────────────────────────────────────────
 # Fully qualified names avoid collisions with built-in commands.
-# Override with ISSUE_WORKFLOW_SKILL_PREFIX="" to use short names.
-_PREFIX="${ISSUE_WORKFLOW_SKILL_PREFIX:-issue-workflow:}"
+# Override with TRIAGE_SKILL_PREFIX="" to use short names.
+_PREFIX="${TRIAGE_SKILL_PREFIX:-triage:}"
 
 declare -A STAGE_SKILL=(
-  [research]="/${_PREFIX}research"
+  [inventory]="/${_PREFIX}inventory"
+  [reconcile]="/${_PREFIX}reconcile"
+  [cluster]="/${_PREFIX}cluster"
   [interview]="/${_PREFIX}interview"
-  [plan]="/${_PREFIX}plan"
-  [execute]="/${_PREFIX}execute"
-  [debug]="/${_PREFIX}debug"
+  [consolidate]="/${_PREFIX}consolidate"
   [verify]="/${_PREFIX}verify"
-  [review]="/${_PREFIX}review"
   [integrate]="/${_PREFIX}integrate"
 )
 
 declare -A STAGE_DOC=(
-  [research]="Research.md"
+  [inventory]="Inventory.md"
+  [reconcile]="Reconcile.md"
+  [cluster]="Cluster.md"
   [interview]="Interview.md"
-  [plan]="Plan.md"
-  [execute]="Execute.md"
-  [debug]="Debug.md"
+  [consolidate]="Triage.md"
   [verify]="Verify.md"
-  [review]="Review.md"
   [integrate]="Integration.md"
 )
 
 # ── Model assignments (configurable via env vars) ─────────────────
-# Override all stages: ISSUE_WORKFLOW_MODEL=sonnet
-# Override one stage: ISSUE_WORKFLOW_MODEL_RESEARCH=fable[1m]
+# Override all stages: TRIAGE_MODEL=sonnet
+# Override one stage: TRIAGE_MODEL_CLUSTER=fable[1m]
 # Per-stage env var takes precedence over the global override.
 declare -A STAGE_MODEL=(
-  [setup]="${ISSUE_WORKFLOW_MODEL_SETUP:-${ISSUE_WORKFLOW_MODEL:-haiku}}"
-  [research]="${ISSUE_WORKFLOW_MODEL_RESEARCH:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [interview]="${ISSUE_WORKFLOW_MODEL_INTERVIEW:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [plan]="${ISSUE_WORKFLOW_MODEL_PLAN:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [execute]="${ISSUE_WORKFLOW_MODEL_EXECUTE:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [debug]="${ISSUE_WORKFLOW_MODEL_DEBUG:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [verify]="${ISSUE_WORKFLOW_MODEL_VERIFY:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [review]="${ISSUE_WORKFLOW_MODEL_REVIEW:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [integrate]="${ISSUE_WORKFLOW_MODEL_INTEGRATE:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
+  [setup]="${TRIAGE_MODEL_SETUP:-${TRIAGE_MODEL:-haiku}}"
+  [inventory]="${TRIAGE_MODEL_INVENTORY:-${TRIAGE_MODEL:-opus[1m]}}"
+  [reconcile]="${TRIAGE_MODEL_RECONCILE:-${TRIAGE_MODEL:-opus[1m]}}"
+  [cluster]="${TRIAGE_MODEL_CLUSTER:-${TRIAGE_MODEL:-opus[1m]}}"
+  [interview]="${TRIAGE_MODEL_INTERVIEW:-${TRIAGE_MODEL:-opus[1m]}}"
+  [consolidate]="${TRIAGE_MODEL_CONSOLIDATE:-${TRIAGE_MODEL:-opus[1m]}}"
+  [verify]="${TRIAGE_MODEL_VERIFY:-${TRIAGE_MODEL:-opus[1m]}}"
+  [integrate]="${TRIAGE_MODEL_INTEGRATE:-${TRIAGE_MODEL:-opus[1m]}}"
 )
 
 # ── Effort assignments (configurable via env vars) ────────────────
 declare -A STAGE_EFFORT=(
-  [setup]="${ISSUE_WORKFLOW_EFFORT_SETUP:-low}"
-  [research]="${ISSUE_WORKFLOW_EFFORT_RESEARCH:-xhigh}"
-  [interview]="${ISSUE_WORKFLOW_EFFORT_INTERVIEW:-xhigh}"
-  [plan]="${ISSUE_WORKFLOW_EFFORT_PLAN:-xhigh}"
-  [execute]="${ISSUE_WORKFLOW_EFFORT_EXECUTE:-xhigh}"
-  [debug]="${ISSUE_WORKFLOW_EFFORT_DEBUG:-xhigh}"
-  [verify]="${ISSUE_WORKFLOW_EFFORT_VERIFY:-xhigh}"
-  [review]="${ISSUE_WORKFLOW_EFFORT_REVIEW:-xhigh}"
-  [integrate]="${ISSUE_WORKFLOW_EFFORT_INTEGRATE:-xhigh}"
+  [setup]="${TRIAGE_EFFORT_SETUP:-low}"
+  [inventory]="${TRIAGE_EFFORT_INVENTORY:-xhigh}"
+  [reconcile]="${TRIAGE_EFFORT_RECONCILE:-max}"
+  [cluster]="${TRIAGE_EFFORT_CLUSTER:-max}"
+  [interview]="${TRIAGE_EFFORT_INTERVIEW:-xhigh}"
+  [consolidate]="${TRIAGE_EFFORT_CONSOLIDATE:-xhigh}"
+  [verify]="${TRIAGE_EFFORT_VERIFY:-xhigh}"
+  [integrate]="${TRIAGE_EFFORT_INTEGRATE:-xhigh}"
 )
 
 # ── Defaults ──────────────────────────────────────────────────────
 EFFORT="${CLAUDE_CODE_EFFORT_LEVEL:-xhigh}"
 EFFORT_EXPLICIT=false
 RESUME_FROM=""
-ISSUE=""
+SESSION_EXPLICIT=""
 
 # ── Usage / help ──────────────────────────────────────────────────
 usage() {
   cat <<'EOF'
-Usage: work-issue <issue-number> [OPTIONS]
+Usage: triage [OPTIONS]
 
-Orchestrates a full issue-to-PR workflow using Claude Code skills.
-Stages run as a state machine -- pre-execution stages can loop freely,
-post-execution stages can loop back to verify.
+Consolidates open GitHub issues (and in-code TODOs) into a small set of
+well-scoped, dependency-aware issues using Claude Code skills. Stages run
+as a state machine; the interview stage gates all GitHub mutations behind
+explicit user approval.
 
 Options:
   --effort <level>   Effort level: high, xhigh (default), or max
   --model <model>    Override model for all stages (e.g., sonnet, fable[1m])
-  --resume <stage>   Resume from a specific stage (skips prior stages)
+  --resume <stage>   Resume from a specific stage (requires --session)
+  --session <N>      Use a specific session number (auto-increments if omitted)
   --help             Show this help message
 
 Stages:
-  setup        Create branch, work folder, Issue.md; run repo setup
-  research     Deep codebase + web + library investigation
-  interview    Resolve open questions with user input
-  plan         Draft and approve implementation plan; open draft PR
-  ── hard wall ── (no going back once execution starts)
-  execute      Implement the plan; signals debug on failure
-  debug        Root cause analysis and fix (triggered by execute/verify/review)
-  verify       Full verification suite; signals debug on failure
-  review       Code quality review; signals debug for critical/important issues
-  integrate    Rebase/merge main; skips to done if main hasn't moved
+  setup          Create branch, session folder, Session.md, draft PR; run repo setup
+  inventory      Read every open issue (full comment threads) and in-code TODOs
+  reconcile      Classify each item: already-fixed / duplicate / still-live
+  cluster        Build the dependency graph; consolidate into well-scoped bundles
+  interview      Present the full triage plan for approval (no GitHub mutations yet)
+  consolidate    Apply the approved closes/merges/new issues on GitHub
+  verify         Confirm GitHub state matches the approved plan; salvage failed ops
+  integrate      Rebase report branch onto main if needed; mark PR ready
 
 Stage transitions:
-  Research, interview, and plan can loop back to earlier stages.
-  Execute, verify, and review signal debug when they encounter failures.
-  Debug returns to the stage that triggered it after fixing the issue.
-  Review signals verify when it makes code changes.
-  Integrate signals done (main clean) or verify (after rebase).
+  Pre-consolidate stages (inventory/reconcile/cluster) can loop back for more depth.
+  Interview can loop back to cluster/reconcile if the user wants re-planning.
+  Interview advances to consolidate only after the full plan is approved.
+  Verify loops to consolidate if it finds gaps; advances to integrate if all match.
+  Integrate handles rebase onto main; advances to done.
   Skills signal non-default transitions via .next-stage file.
 
 Configuration (env vars):
-  ISSUE_WORKFLOW_MODEL              Override model for all stages
-  ISSUE_WORKFLOW_MODEL_<STAGE>      Override model for one stage (e.g., _RESEARCH)
-  ISSUE_WORKFLOW_EFFORT_<STAGE>     Override effort for one stage
-  ISSUE_WORKFLOW_SKILL_PREFIX       Skill name prefix (e.g., "issue-workflow:")
-  CLAUDE_PLUGINS_SKIP_UPDATE        Set to skip the startup marketplace refresh
+  TRIAGE_MODEL                Override model for all stages
+  TRIAGE_MODEL_<STAGE>        Override model for one stage (e.g., _CLUSTER)
+  TRIAGE_EFFORT_<STAGE>       Override effort for one stage
+  TRIAGE_SKILL_PREFIX         Skill name prefix (e.g., "triage:")
+  CLAUDE_PLUGINS_SKIP_UPDATE  Set to skip the startup marketplace refresh
 
 Auto-update:
   On fresh runs (not --resume), the orchestrator refreshes the marketplace
@@ -177,35 +172,30 @@ Auto-update:
   Set CLAUDE_PLUGINS_SKIP_UPDATE=1 to skip.
 
 Examples:
-  work-issue 42                     # Full workflow for issue #42
-  work-issue 42 --effort max        # Use max effort level
-  work-issue 42 --model sonnet      # Use sonnet for all stages
-  work-issue 42 --resume plan       # Resume from planning stage
-  work-issue 42 --resume verify     # Re-run verification
+  triage                                   # New triage session
+  triage --effort max                      # Use max effort level
+  triage --model fable[1m]                  # Use fable for all stages
+  triage --resume cluster --session 3      # Resume session 3 from clustering
+  triage --resume interview --session 1    # Re-run the approval gate for session 1
 EOF
   exit "${1:-0}"
 }
 
 # ── Parse arguments ───────────────────────────────────────────────
-[[ $# -lt 1 ]] && usage 1
-[[ "$1" == "--help" ]] && usage 0
-
-ISSUE="$1"
-shift
-
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --effort) EFFORT="${2:?--effort requires a value (high, xhigh, or max)}"; EFFORT_EXPLICIT=true; shift 2 ;;
     --model)
-      ISSUE_WORKFLOW_MODEL="${2:?--model requires a value}"
-      export ISSUE_WORKFLOW_MODEL
+      TRIAGE_MODEL="${2:?--model requires a value}"
+      export TRIAGE_MODEL
       # Re-apply to all stages
       for _s in "${ALL_STAGES[@]}"; do
-        STAGE_MODEL[$_s]="${ISSUE_WORKFLOW_MODEL}"
+        STAGE_MODEL[$_s]="${TRIAGE_MODEL}"
       done
       shift 2
       ;;
     --resume) RESUME_FROM="${2:?--resume requires a stage name}"; shift 2 ;;
+    --session) SESSION_EXPLICIT="${2:?--session requires a number}"; shift 2 ;;
     --help)   usage 0 ;;
     *)        echo "Error: unknown option: $1"; usage 1 ;;
   esac
@@ -224,6 +214,10 @@ if [[ -n "$RESUME_FROM" ]]; then
     echo "Valid stages: ${ALL_STAGES[*]}"
     exit 1
   fi
+  if [[ -z "$SESSION_EXPLICIT" && "$RESUME_FROM" != "setup" ]]; then
+    echo "Error: --resume requires --session <N> (which session to resume)"
+    exit 1
+  fi
 fi
 
 # ── Validate environment ──────────────────────────────────────────
@@ -238,10 +232,6 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 }
 cd "$REPO_ROOT"
 
-# NOTE: Permissions are handled by settings.json (defaultMode: bypassPermissions).
-# If that doesn't work in practice, add --dangerously-skip-permissions to each
-# claude invocation below.
-
 # ── Plugin self-update ────────────────────────────────────────────
 # Refresh the marketplace catalog, then force-install the latest plugin
 # version. The update takes effect on the next stage's fresh claude
@@ -250,41 +240,30 @@ cd "$REPO_ROOT"
 if [[ -z "$RESUME_FROM" && -z "${CLAUDE_PLUGINS_SKIP_UPDATE:-}" ]]; then
   echo "Checking for plugin updates..."
   timeout --kill-after=5 20 claude plugin marketplace update 22a435-workflows </dev/null || true
-  if ! timeout --kill-after=5 20 claude plugin update issue-workflow@22a435-workflows </dev/null; then
+  if ! timeout --kill-after=5 20 claude plugin update triage@22a435-workflows </dev/null; then
     echo "Warning: plugin update failed or timed out; continuing with installed version." >&2
   fi
 fi
 
-# ── Read issue from GitHub (body + full comment thread) ───────────
-# Comments are fetched too: scope and context frequently live in replies,
-# not the original body. The thread is rendered into Issue.md so every
-# downstream stage sees it.
-echo "Reading issue #${ISSUE} (with comment thread)..."
-ISSUE_JSON="$(gh issue view "$ISSUE" --json title,body,labels,comments 2>/dev/null)" || {
-  echo "Error: could not read issue #${ISSUE}. Check gh auth and issue number."
-  exit 1
-}
-ISSUE_TITLE="$(echo "$ISSUE_JSON" | jq -r '.title')"
-ISSUE_BODY="$(echo "$ISSUE_JSON" | jq -r '.body')"
-ISSUE_LABELS="$(echo "$ISSUE_JSON" | jq -r '[.labels[].name] | join(", ")')"
-# Render the comment thread as markdown (data only -- never executed).
-ISSUE_THREAD="$(echo "$ISSUE_JSON" | jq -r '
-  if (.comments | length) == 0 then
-    "No comments."
-  else
-    [.comments[] | "### Comment by \(.author.login // "unknown") -- \(.createdAt)\n\n\(.body)"]
-    | join("\n\n---\n\n")
-  end
-')"
-GITHUB_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+# ── Session numbering ────────────────────────────────────────────
+TRIAGE_BASE="${REPO_ROOT}/claude-triages"
+mkdir -p "$TRIAGE_BASE"
 
-BRANCH="claude/${ISSUE}"
-WORK_DIR="${REPO_ROOT}/claude-work/${ISSUE}"
+if [[ -n "$SESSION_EXPLICIT" ]]; then
+  SESSION="$SESSION_EXPLICIT"
+else
+  LAST_SESSION=$(ls -1d "${TRIAGE_BASE}"/[0-9]* 2>/dev/null | xargs -I{} basename {} | sort -n | tail -1)
+  SESSION=$(( ${LAST_SESSION:-0} + 1 ))
+fi
+
+WORK_DIR="${TRIAGE_BASE}/${SESSION}"
+BRANCH="claude/triage/${SESSION}"
+GITHUB_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "unknown")"
 
 # ── Banner ────────────────────────────────────────────────────────
 echo ""
 echo "═══════════════════════════════════════════════════════════"
-echo "  Issue #${ISSUE}: ${ISSUE_TITLE}"
+echo "  Triage Session #${SESSION}"
 echo "  Repo:   ${GITHUB_REPO}"
 echo "  Branch: ${BRANCH}"
 echo "  Effort: ${EFFORT}"
@@ -316,8 +295,6 @@ refresh_env() {
   # After a stage installs tools (via setup scripts, package managers, etc.),
   # PATH in this shell is stale. Spawn a fresh interactive login shell to pick
   # up changes from ~/.bashrc, ~/.profile, /etc/profile.d/*, etc.
-  # NOTE: must be -lic (interactive), not just -lc. Ubuntu's .bashrc exits
-  # early for non-interactive shells, skipping nvm/fnm/volta init.
   local new_path
   new_path="$(bash -lic 'echo "$PATH"' 2>/dev/null)" || return 0
   if [[ -n "$new_path" ]]; then
@@ -335,7 +312,7 @@ check_document() {
     read -rp "Continue to next stage anyway? [y/N] " yn
     case "$yn" in
       [Yy]*) return 0 ;;
-      *)     echo "Aborting. Re-run with: work-issue ${ISSUE} --resume <stage>"
+      *)     echo "Aborting. Re-run with: triage --resume <stage> --session ${SESSION}"
              exit 1 ;;
     esac
   fi
@@ -366,21 +343,6 @@ resolve_next_stage() {
       return
     elif [[ -n "$next" ]]; then
       echo "[signal] WARNING: Stage '${current}' requested '${next}' but that transition is not allowed. Using default." >&2
-    fi
-  fi
-
-  # Dynamic default for debug: return to the stage that triggered it
-  if [[ "$current" == "debug" ]]; then
-    local origin_file="${WORK_DIR}/.debug-origin"
-    if [[ -f "$origin_file" ]]; then
-      local origin
-      origin="$(< "$origin_file")"
-      origin="${origin//[[:space:]]/}"
-      if [[ -n "$origin" ]] && validate_transition "debug" "$origin"; then
-        echo "[debug] Returning to origin stage '${origin}'" >&2
-        echo "$origin"
-        return
-      fi
     fi
   fi
 
@@ -429,7 +391,7 @@ while [[ "$current_stage" != "done" ]]; do
     echo ""
     echo "ERROR: Exceeded maximum stage executions (${MAX_STAGE_RUNS}). Possible infinite loop."
     echo "Last stage: ${current_stage}"
-    echo "Re-run with --resume <stage> to continue manually."
+    echo "Re-run with --resume <stage> --session ${SESSION} to continue manually."
     exit 1
   fi
 
@@ -453,35 +415,6 @@ while [[ "$current_stage" != "done" ]]; do
   stage_model="${STAGE_MODEL[$current_stage]}"
   stage_effort="$(resolve_stage_effort "$current_stage")"
 
-  # Trivial integration: if main hasn't diverged, handle entirely in bash
-  if [[ "$current_stage" == "integrate" ]]; then
-    git fetch origin main 2>/dev/null || true
-    diverged_commits=$(git log --oneline HEAD..origin/main 2>/dev/null | wc -l)
-    if [[ $diverged_commits -eq 0 ]]; then
-      stage_banner "$current_stage" "${STAGE_DESC[$current_stage]}" "bash (inline)" "n/a"
-
-      # Write trivial Integration.md
-      cat > "${WORK_DIR}/Integration.md" << INTEG_EOF
-# Integration Report: Issue #${ISSUE}
-
-## Summary
-Main has not diverged. No integration needed. Branch is ready for merge.
-INTEG_EOF
-
-      # Commit, push, comment on PR
-      git add "${WORK_DIR}/Integration.md"
-      git commit -m "claude-work(integrate): no integration needed for issue #${ISSUE}"
-      git push
-      gh pr comment "$BRANCH" --body "**Integration:** Main has not diverged. No integration needed. Branch is ready for merge." 2>/dev/null || true
-
-      # Signal done and advance
-      echo "done" > "${WORK_DIR}/.next-stage"
-      previous_stage="$current_stage"
-      current_stage="$(resolve_next_stage "$current_stage")"
-      continue
-    fi
-  fi
-
   stage_banner "$current_stage" "${STAGE_DESC[$current_stage]}" "$stage_model" "$stage_effort"
 
   case "$current_stage" in
@@ -499,49 +432,84 @@ INTEG_EOF
       fi
 
       # Create work directory
-      mkdir -p "$WORK_DIR"
+      mkdir -p "${WORK_DIR}"
 
-      # Write Issue.md (header uses variable expansion; body appended literally
-      # via printf to prevent command injection from issue text)
-      cat > "${WORK_DIR}/Issue.md" << ISSUE_EOF
-# Issue #${ISSUE}: ${ISSUE_TITLE}
+      # Write Session.md
+      cat > "${WORK_DIR}/Session.md" << SESSION_EOF
+# Triage Session #${SESSION}
 
 ## Source
 - **Repository:** ${GITHUB_REPO}
-- **Issue:** [#${ISSUE}](https://github.com/${GITHUB_REPO}/issues/${ISSUE})
 - **Branch:** \`${BRANCH}\`
-- **Labels:** ${ISSUE_LABELS:-none}
-
-## Issue Text
-
-ISSUE_EOF
-      printf '%s\n' "$ISSUE_BODY" >> "${WORK_DIR}/Issue.md"
-
-      # Append the full comment thread (body appended literally via printf to
-      # prevent command injection from issue/comment text)
-      {
-        printf '\n## Discussion Thread\n\n'
-        printf '%s\n' "$ISSUE_THREAD"
-      } >> "${WORK_DIR}/Issue.md"
+- **Started:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+SESSION_EOF
 
       # Commit and push
-      git add "${WORK_DIR}/Issue.md"
-      git commit -m "claude-work: begin issue #${ISSUE} -- ${ISSUE_TITLE}"
+      git add "${WORK_DIR}/Session.md"
+      git commit -m "claude-triage: begin triage session #${SESSION}"
       git push -u origin "$BRANCH"
 
-      # Run environment setup via Claude
+      # Open a draft PR to carry the triage report (subsequent stages comment on it)
+      if ! gh pr view "$BRANCH" >/dev/null 2>&1; then
+        gh pr create --draft \
+          --title "Triage session #${SESSION}" \
+          --body "Automated issue triage / consolidation. Report artifacts live under \`claude-triages/${SESSION}/\`. GitHub issue mutations are applied only after the plan is approved in the interview stage." \
+          --base main --head "$BRANCH" 2>/dev/null \
+          && echo "Draft PR created." \
+          || echo "WARNING: could not create draft PR (continuing; stages will retry comments)."
+      fi
+
+      # Run environment setup via Claude (so reconcile can investigate the code)
       echo ""
       echo "Launching Claude to run repo-specific setup..."
       echo ""
-      claude --model "$stage_model" --effort "$stage_effort" "Check this repo's CLAUDE.md, README, and look for setup scripts (scripts/setup.sh, Makefile setup targets, package.json scripts, etc.). Run whatever is needed to initialize the development environment. Report what you did when complete."
+      claude --model "$stage_model" --effort "$stage_effort" "This is a fresh development environment for an issue-triage session that will need to read and search this codebase. Check this repo's CLAUDE.md, README, and look for setup scripts (scripts/setup.sh, Makefile setup targets, package.json scripts, etc.). Run whatever is needed to initialize the development environment so the code can be searched and built. Report what you did when complete."
 
-      current_stage="research"
+      current_stage="inventory"
+      ;;
+
+    # ── TRIVIAL INTEGRATION (inline -- skip Claude when main hasn't moved)
+    integrate)
+      git fetch origin main 2>/dev/null || true
+      diverged_commits=$(git log --oneline HEAD..origin/main 2>/dev/null | wc -l)
+      if [[ $diverged_commits -eq 0 ]]; then
+        echo "  Main has not diverged. Handling integration inline (no Claude session needed)."
+
+        cat > "${WORK_DIR}/Integration.md" << INTEG_EOF
+# Integration Report: Triage Session #${SESSION}
+
+## Summary
+Main has not diverged. No integration needed. Branch is ready for merge.
+INTEG_EOF
+
+        git add "${WORK_DIR}/Integration.md"
+        git commit -m "claude-triage(integrate): no integration needed [session #${SESSION}]"
+        git push
+        gh pr comment "$BRANCH" --body "**Integration:** Main has not diverged. No integration needed. Branch is ready for merge." 2>/dev/null || true
+
+        echo "done" > "${WORK_DIR}/.next-stage"
+        previous_stage="$current_stage"
+        current_stage="$(resolve_next_stage "$current_stage")"
+      else
+        echo "  Main has diverged (${diverged_commits} new commits). Launching Claude for integration."
+
+        clean_signal_file
+        claude --model "$stage_model" --effort "$stage_effort" "${STAGE_SKILL[$current_stage]} ${SESSION}"
+
+        doc="${STAGE_DOC[$current_stage]:-}"
+        if [[ -n "$doc" ]]; then
+          check_document "$doc"
+        fi
+
+        previous_stage="$current_stage"
+        current_stage="$(resolve_next_stage "$current_stage")"
+      fi
       ;;
 
     # ── ALL SKILL-BASED STAGES ─────────────────────────────────
-    research|interview|plan|execute|debug|verify|review|integrate)
+    inventory|reconcile|cluster|interview|consolidate|verify)
       clean_signal_file
-      claude --model "$stage_model" --effort "$stage_effort" "${STAGE_SKILL[$current_stage]} ${ISSUE}"
+      claude --model "$stage_model" --effort "$stage_effort" "${STAGE_SKILL[$current_stage]} ${SESSION}"
 
       doc="${STAGE_DOC[$current_stage]:-}"
       if [[ -n "$doc" ]]; then
@@ -550,12 +518,6 @@ ISSUE_EOF
 
       previous_stage="$current_stage"
       current_stage="$(resolve_next_stage "$current_stage")"
-
-      # Save origin when transitioning TO debug
-      if [[ "$current_stage" == "debug" ]]; then
-        echo "$previous_stage" > "${WORK_DIR}/.debug-origin"
-        echo "[debug] Saved origin stage '${previous_stage}'"
-      fi
       ;;
 
     *)
@@ -575,11 +537,12 @@ gh pr ready "$BRANCH" 2>/dev/null && echo "PR marked as ready." || echo "WARNING
 
 echo ""
 echo "═══════════════════════════════════════════════════════════"
-echo "  Workflow complete for issue #${ISSUE}"
+echo "  Triage session #${SESSION} complete"
 echo "  Branch: ${BRANCH}"
 echo "  Work:   ${WORK_DIR}/"
 echo ""
-echo "  The PR is ready for final human review and merge."
-echo "  To re-run integration if main has moved:"
-echo "    work-issue ${ISSUE} --resume integrate"
+echo "  The backlog has been consolidated. The PR carries the report."
+echo "  Each resulting issue is a single-PR bite for: work-issue <n>"
+echo "  To re-run a stage:"
+echo "    triage --resume <stage> --session ${SESSION}"
 echo "═══════════════════════════════════════════════════════════"

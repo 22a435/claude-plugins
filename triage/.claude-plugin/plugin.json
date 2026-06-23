@@ -1,0 +1,8 @@
+{
+  "name": "triage",
+  "version": "1.0.0",
+  "description": "Issue triage workflow: reads open GitHub issues and in-code TODOs, closes already-fixed and duplicate issues, and consolidates the rest into a small, loosely-coupled set of well-scoped issues -- each a single-PR bite for the issue workflow, with dependent work bundled behind the design decision it hinges on",
+  "author": { "name": "22a435" },
+  "repository": "https://github.com/22a435/claude-plugins",
+  "license": "MIT"
+}
