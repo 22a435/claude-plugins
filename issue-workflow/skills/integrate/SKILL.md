@@ -1,13 +1,13 @@
 ---
 name: integrate
-description: Prepare the feature branch for merge. Rebases or merges main, resolves conflicts. Invoke with /issue-workflow:integrate <issue-number>.
+description: Prepare the feature branch for merge. Rebases onto origin/main, resolves conflicts. Invoke with /issue-workflow:integrate <issue-number>.
 disable-model-invocation: true
 allowed-tools: Read, Grep, Glob, Bash, Agent, Write, Edit
 ---
 
 # Integration Phase
 
-You are performing the **integration** stage of an issue workflow. All development, verification, and review are complete. Your job is to ensure the feature branch is compatible with the current state of main and ready to merge.
+You are performing the **integration** stage of an issue workflow. All development, verification, and review are complete. Your job is to ensure the feature branch is compatible with the current state of `origin/main` (the canonical upstream) and ready to merge.
 
 ## Workflow Context
 
@@ -33,19 +33,21 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 
 ### Step 1: Check Branch State
 
+**`origin/main` is the canonical upstream -- always compare against it, never local `main`.** The orchestrator does not keep your local `main` current, so it is almost always stale; comparing against it reports false divergence (or hides real divergence). Always `git fetch origin main` first, then compare only against `origin/main`.
+
 ```bash
 git fetch origin main
-git log --oneline main..HEAD    # Commits on this branch
-git log --oneline HEAD..origin/main  # Commits on main since branch point
+git log --oneline origin/main..HEAD   # Commits on this branch not yet on origin/main
+git log --oneline HEAD..origin/main   # Commits on origin/main since this branch's point
 ```
 
-If main has not moved since the branch was created (no new commits), integration is trivial:
+If `origin/main` has not moved since the branch was created (the second command printed nothing), integration is trivial:
 
 ```
 # Integration Report: Issue #<number>
 
 ## Summary
-Main has not diverged. No integration needed. Branch is ready for merge.
+`origin/main` has not diverged. No integration needed. Branch is ready for merge.
 ```
 
 Before writing Integration.md and exiting, run the follow-up issue existence check from Step 6 -- it applies to both the trivial and rebased paths. If any referenced issues are missing, file them now (with the review/verify/debug context) before signaling `done`.
@@ -55,9 +57,9 @@ Write this to Integration.md, commit, push, and signal `done` to skip redundant 
 echo "done" > ./claude-work/$0/.next-stage
 ```
 
-### Step 2: Rebase onto Main
+### Step 2: Rebase onto origin/main
 
-If main has moved, rebase the feature branch:
+If `origin/main` has moved, rebase the feature branch onto it:
 
 ```bash
 git rebase origin/main
@@ -72,7 +74,7 @@ If the rebase encounters conflicts:
 3. **For semantic conflicts** (both sides changed the same logic, and the correct resolution is ambiguous): escalate to the user with:
    - What file and function is conflicted
    - What the feature branch intended
-   - What main changed
+   - What `origin/main` changed
    - Your recommended resolution (if you have one)
    - Ask the user to decide
 
@@ -144,12 +146,12 @@ If all referenced issues exist, proceed.
 # Integration Report: Issue #<number>
 
 ## Summary
-- **Main divergence:** <N> commits on main since branch point
+- **`origin/main` divergence:** <N> commits on `origin/main` since branch point
 - **Conflicts:** <none / N files>
 - **Resolution:** <automatic / required user input>
 
-## Main Changes Since Branch Point
-Brief summary of what changed on main (from git log).
+## origin/main Changes Since Branch Point
+Brief summary of what changed on `origin/main` (from git log).
 
 ## Conflicts Resolved
 
@@ -202,7 +204,7 @@ echo "verify" > ./claude-work/$0/.next-stage
 
 ## Important Notes
 
-- **Always signal a transition:** write `done` (main hasn't moved) or `verify` (rebase happened) to `.next-stage`. The orchestrator re-runs the full verify->review->integrate pipeline after a rebase.
+- **Always signal a transition:** write `done` (`origin/main` hasn't moved) or `verify` (rebase happened) to `.next-stage`. The orchestrator re-runs the full verify->review->integrate pipeline after a rebase.
 - Use `--force-with-lease` (never `--force`) when pushing after rebase.
 - If the rebase is hopelessly complex (many conflicts across many files), suggest to the user that a merge commit might be more appropriate, and ask how they want to proceed.
 - This skill may be re-run multiple times if the PR stays open while main continues to move. Each run appends to Integration.md.
@@ -217,11 +219,11 @@ When running under the `work-issue` orchestrator, you can request a transition t
 - The orchestrator validates your request -- invalid transitions are ignored
 
 **When to signal:**
-- `done` -- main has not moved, no integration was needed. Branch is ready to merge:
+- `done` -- `origin/main` has not moved, no integration was needed. Branch is ready to merge:
   ```bash
   echo "done" > ./claude-work/$0/.next-stage
   ```
-- `verify` -- rebase happened (main had new commits). Repeats the verify->review->integrate pipeline to confirm nothing broke:
+- `verify` -- rebase happened (`origin/main` had new commits). Repeats the verify->review->integrate pipeline to confirm nothing broke:
   ```bash
   echo "verify" > ./claude-work/$0/.next-stage
   ```
@@ -236,9 +238,9 @@ If re-triggered, append a new section:
 ## Re-integration (<date>)
 
 ### Reason
-<main moved again / previous integration had issues>
+<`origin/main` moved again / previous integration had issues>
 
-### Changes on Main
+### Changes on origin/main
 ...
 
 ### Conflicts and Resolution

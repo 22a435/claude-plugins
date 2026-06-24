@@ -465,14 +465,14 @@ while [[ "$current_stage" != "done" ]]; do
 # Integration Report: Issue #${ISSUE}
 
 ## Summary
-Main has not diverged. No integration needed. Branch is ready for merge.
+origin/main has not diverged. No integration needed. Branch is ready for merge.
 INTEG_EOF
 
       # Commit, push, comment on PR
       git add "${WORK_DIR}/Integration.md"
       git commit -m "claude-work(integrate): no integration needed for issue #${ISSUE}"
       git push
-      gh pr comment "$BRANCH" --body "**Integration:** Main has not diverged. No integration needed. Branch is ready for merge." 2>/dev/null || true
+      gh pr comment "$BRANCH" --body "**Integration:** origin/main has not diverged. No integration needed. Branch is ready for merge." 2>/dev/null || true
 
       # Signal done and advance
       echo "done" > "${WORK_DIR}/.next-stage"
