@@ -33,14 +33,20 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 
 ### Step 1: Gather Review Context
 
+**Diff against `origin/main` (the canonical upstream), never local `main`.** The orchestrator does not keep local `main` current, so it is almost always stale -- diffing against it folds other people's upstream commits into the review and misrepresents what this branch actually changed. Fetch first:
+
+```bash
+git fetch origin main
+```
+
 1. Get the full diff of all changes on this branch:
    ```bash
-   git diff main...HEAD
+   git diff origin/main...HEAD
    ```
 
 2. Get the list of changed files:
    ```bash
-   git diff main...HEAD --name-only
+   git diff origin/main...HEAD --name-only
    ```
 
 3. Read the Plan.md for context on intended design

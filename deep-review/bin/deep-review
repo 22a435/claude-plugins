@@ -498,25 +498,25 @@ SESSION_EOF
       git fetch origin main 2>/dev/null || true
       diverged_commits=$(git log --oneline HEAD..origin/main 2>/dev/null | wc -l)
       if [[ $diverged_commits -eq 0 ]]; then
-        echo "  Main has not diverged. Handling integration inline (no Claude session needed)."
+        echo "  origin/main has not diverged. Handling integration inline (no Claude session needed)."
 
         cat > "${WORK_DIR}/Integration.md" << INTEG_EOF
 # Integration Report: Session #${SESSION}
 
 ## Summary
-Main has not diverged. No integration needed. Branch is ready for merge.
+origin/main has not diverged. No integration needed. Branch is ready for merge.
 INTEG_EOF
 
         git add "${WORK_DIR}/Integration.md"
         git commit -m "claude-review(integrate): no integration needed [session #${SESSION}]"
         git push
-        gh pr comment "$BRANCH" --body "**Integration:** Main has not diverged. No integration needed. Branch is ready for merge." 2>/dev/null || true
+        gh pr comment "$BRANCH" --body "**Integration:** origin/main has not diverged. No integration needed. Branch is ready for merge." 2>/dev/null || true
 
         echo "done" > "${WORK_DIR}/.next-stage"
         previous_stage="$current_stage"
         current_stage="$(resolve_next_stage "$current_stage")"
       else
-        echo "  Main has diverged (${diverged_commits} new commits). Launching Claude for integration."
+        echo "  origin/main has diverged (${diverged_commits} new commits). Launching Claude for integration."
 
         clean_signal_file
         claude --model "$stage_model" --effort "$stage_effort" "${STAGE_SKILL[$current_stage]} ${SESSION}"
