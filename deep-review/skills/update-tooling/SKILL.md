@@ -46,10 +46,10 @@ If `UpdateTooling.md` already exists (re-trigger), read it to see what was previ
 
 If Interview.md contains an "SC-Auditor Decision" section with `Approved: yes`, install sc-auditor and its subtools:
 
-1. **sc-auditor** (requires Node.js >= 22):
+1. **sc-auditor** (requires Node.js >= 22). Check for an existing install first -- the VM used for deep-review runs typically has it pre-installed. sc-auditor is NOT on the public npm registry (`npm install -g sc-auditor` fails with a 404); install from GitHub:
    ```bash
    node --version  # Verify >= 22
-   npm install -g sc-auditor  # or use npx at runtime
+   command -v sc-auditor || npm list -g sc-auditor || npm install -g github:Archethect/sc-auditor
    ```
 
 2. **Slither** (Python-based static analyzer):

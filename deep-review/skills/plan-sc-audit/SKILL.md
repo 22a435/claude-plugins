@@ -51,7 +51,7 @@ Extract project complexity data from Context.md's "Solidity / Smart Contract Con
 - DeFi patterns detected (ERC20, ERC721, ERC4626, oracles, AMMs, flash loans)
 - Proxy/upgradeable patterns
 
-Only run additional Glob/Grep queries if Context.md is missing specific data needed for configuration thresholds (e.g., exact contract count for functions_per_category).
+Only run additional Glob/Grep queries if Context.md is missing specific data needed for configuration thresholds (e.g., exact contract count for max_functions_per_category).
 
 ### Step 3: Determine Configuration
 
@@ -84,31 +84,31 @@ AskUserQuestion({
 
 **Parallel hunters:** `true` (parallel hunt lanes are generally beneficial)
 
-**Proof tools:** Enable each tool that UpdateTooling.md confirms is installed:
-- `foundry.enabled`: true if `forge` is available
-- `echidna.enabled`: true if `echidna` is available
-- `medusa.enabled`: true if `medusa` is available
-- `halmos.enabled`: true if `halmos` is available
-- `ityfuzz.enabled`: true if `ityfuzz` is available
+**Proof tools** (`proof_tools`, flat booleans): Enable each tool that UpdateTooling.md confirms is installed:
+- `foundry_enabled`: true if `forge` is available
+- `echidna_enabled`: true if `echidna` is available
+- `medusa_enabled`: true if `medusa` is available
+- `halmos_enabled`: true if `halmos` is available
+- `ityfuzz_enabled`: true if `ityfuzz` is available
 
-**Static analysis:**
-- `slither.enabled`: true if `slither` is available
-- `aderyn.enabled`: true if `aderyn` is available
+**Static analysis** (`static_analysis`, flat booleans):
+- `slither_enabled`: true if `slither` is available
+- `aderyn_enabled`: true if `aderyn` is available
 
-**functions_per_category:** Scale based on project size:
+**llm_reasoning.max_functions_per_category:** Scale based on project size:
 - Small (<20 contracts): 25
 - Medium (20-100 contracts): 50
 - Large (>100 contracts): 100
 
-**context_window_budget:** 0.7 default. Increase to 0.85 for smaller focused audits (<20 contracts).
+**llm_reasoning.context_window_budget:** 0.7 default. Increase to 0.85 for smaller focused audits (<20 contracts).
 
-**max_per_category:** 10 for default, 20 for deep mode.
+**max_findings_per_category** (top-level): 10 for default, 20 for deep mode.
 
-**max_analyses:** 5 for default, 10 for deep mode.
+**max_deep_dives** (top-level): 5 for default, 10 for deep mode.
 
-**report_output_dir:** `./claude-reviews/$0/sc-audit`
+**report_output_dir:** `claude-reviews/$0/sc-audit`
 
-**witness_required / demote_unproven:** If unclear whether the user wants strict proof requirements, ask:
+**workflow.require_witness_for_high / verify.demote_unproven_medium_high:** In benchmark mode the loader already defaults demotion to true. Otherwise, if unclear whether the user wants strict proof requirements, ask:
 ```
 AskUserQuestion({
   questions: [{
@@ -135,58 +135,72 @@ Glob({ pattern: "**/*.sol", path: "." })
 
 ### Step 5: Write .sc-auditor.config.json
 
-Write the sc-auditor configuration to `./.sc-auditor.config.json` in the repo root:
+Write the sc-auditor configuration to `./.sc-auditor.config.json` in the repo root.
+
+The key names below are sc-auditor 2.0.0's canonical schema (mirroring its `config.example.json`). The loader silently ignores unrecognized keys -- a misspelled or misplaced key does not error, it silently falls back to a lower default -- so copy these names exactly and run the validation in Step 6 afterward.
 
 ```bash
 cat > .sc-auditor.config.json << 'CONFIG_EOF'
 {
   "default_severity": ["CRITICAL", "HIGH", "MEDIUM"],
-  "quality_score": 2,
-  "report_output_dir": "./claude-reviews/<session>/sc-audit",
+  "default_quality_score": 2,
+  "report_output_dir": "claude-reviews/<session>/sc-audit",
+  "max_findings_per_category": <N>,
+  "max_deep_dives": <N>,
 
   "static_analysis": {
-    "slither": { "enabled": <true/false> },
-    "aderyn": { "enabled": <true/false> }
+    "slither_enabled": <true/false>,
+    "aderyn_enabled": <true/false>
   },
 
   "llm_reasoning": {
-    "functions_per_category": <N>,
+    "max_functions_per_category": <N>,
     "context_window_budget": <0.7 or 0.85>
   },
 
   "workflow": {
     "mode": "<default|deep|benchmark>",
     "parallel_hunters": true,
-    "autonomous_mode": false,
-    "witness_required": <true/false>
+    "autonomous": false,
+    "require_witness_for_high": <true/false>
   },
 
   "proof_tools": {
-    "foundry": { "enabled": <true/false> },
-    "echidna": { "enabled": <true/false> },
-    "medusa": { "enabled": <true/false> },
-    "halmos": { "enabled": <true/false> },
-    "ityfuzz": { "enabled": <true/false> }
+    "foundry_enabled": <true/false>,
+    "echidna_enabled": <true/false>,
+    "medusa_enabled": <true/false>,
+    "halmos_enabled": <true/false>,
+    "ityfuzz_enabled": <true/false>
   },
 
   "verify": {
-    "demote_unproven": <true/false>
-  },
-
-  "findings": {
-    "max_per_category": <N>
-  },
-
-  "deep_dive": {
-    "max_analyses": <N>
+    "demote_unproven_medium_high": <true/false>
   }
 }
 CONFIG_EOF
 ```
 
-Replace all placeholders with actual values determined in Step 3.
+Replace all placeholders with actual values determined in Step 3. Note `report_output_dir` must be a relative path without leading `/` or `..` segments -- the loader rejects absolute paths.
 
-### Step 6: Write ScAuditPlan.md
+### Step 6: Validate the Config with sc-auditor's Own Loader
+
+Run sc-auditor's compiled config loader against the file you just wrote and confirm the resolved values match what you intended. This catches wrong key names outright: the loader silently ignores unrecognized keys, so a typo shows up only as a resolved value falling back to its default.
+
+```bash
+SC_AUDITOR_DIR="$(npm root -g)/sc-auditor"
+SC_AUDITOR_CONFIG="$(git rev-parse --show-toplevel)/.sc-auditor.config.json" \
+  node -e "import('${SC_AUDITOR_DIR}/dist/config/loader.js').then(m => console.log(JSON.stringify(m.loadConfig(), null, 2)))"
+```
+
+If sc-auditor is not in the global npm root (e.g. it was installed some other way), find its install path in UpdateTooling.md or via `command -v sc-auditor` and point at that package's `dist/config/loader.js` instead. If you cannot locate a compiled loader at all, fall back to diffing your file key-by-key against the schema in Step 5 and note in ScAuditPlan.md that loader validation was skipped.
+
+Then compare the loader's resolved output against the values you chose in Step 3:
+
+- If the loader **throws** (`ERROR: CONFIG_VALIDATION - ...`), a value is out of range or mistyped -- fix the config and re-run.
+- If any resolved value **differs from what you wrote** (e.g. you wrote 100 for `max_functions_per_category` but the output shows 50), the key name or nesting is wrong -- fix it to match the Step 5 schema exactly and re-run.
+- Only proceed once every intended value appears verbatim in the resolved output.
+
+### Step 7: Write ScAuditPlan.md
 
 Write `./claude-reviews/$0/ScAuditPlan.md`:
 
@@ -242,9 +256,10 @@ HUNT phase (hotspot selection). You will be prompted during the run-sc-audit sta
 
 ## Config File
 Written to: ./.sc-auditor.config.json
+Loader validation: <passed | skipped (reason)>
 ```
 
-### Step 7: Commit, Push, and Comment
+### Step 8: Commit, Push, and Comment
 
 ```bash
 git add ./claude-reviews/$0/ScAuditPlan.md ./.sc-auditor.config.json
