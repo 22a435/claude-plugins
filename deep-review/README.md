@@ -71,12 +71,16 @@ The `plan-sc-audit` and `run-sc-audit` stages are conditional -- they only run f
 | **review** | opus[1m] | Deep review with up to 10 parallel sub-reviewers |
 | **remediation-plan** | opus[1m] | Prioritize fixes and issues; requires user approval |
 | **remediation** | opus[1m] | Apply fixes, create issues, run /code-review cleanup |
-| **verify** | opus[1m] | Verify remediations match plan and code |
+| **verify** | opus[1m] | Verify remediations match plan and code; run local CI |
 | **integrate** | opus[1m] | Prepare branch for merge; rebase onto main if needed |
 
 ### State Machine
 
 Interview, update-tooling, and plan can loop between each other (for adding tools or adjusting priorities). For Solidity projects, interview can signal `plan-sc-audit`, which configures sc-auditor and advances to `run-sc-audit`, then to `plan`. The review stage can self-loop for deeper investigation. Remediation-plan can loop back to interview/update-tooling if more tools are needed. Verify loops back to remediation if gaps are found; otherwise advances to integrate. Integrate handles rebasing onto main; if a rebase occurs it loops back to verify to confirm remediations survived.
+
+### Local CI Gate
+
+The PR stays a draft until local CI is confirmed green against the final code state. The verify stage discovers the repo's local CI script (documented command in CLAUDE.md/README, `scripts/ci*`, `make ci`, or `npm run ci`), runs it, and records the command plus a tree-content hash (excluding `claude-reviews/`) in `.local-ci-state`. Just before `gh pr ready`, the orchestrator re-checks that hash: if code changed since the last green run, it re-runs local CI inline; if red, it re-enters the workflow at verify (max 2 re-entries), and if local CI still cannot go green the PR is left as a draft. This keeps red runs off GitHub Actions, which only fires once the PR is marked ready. Set `DEEP_REVIEW_SKIP_CI_GATE=1` to bypass.
 
 ### Sub-Reviewers (Review Stage)
 
@@ -105,6 +109,7 @@ The plan stage determines which sub-reviewers to launch based on the project. Sm
 | `DEEP_REVIEW_MODEL_<STAGE>` | Override model for one stage | per-stage default |
 | `DEEP_REVIEW_EFFORT_<STAGE>` | Override effort for one stage | per-stage default |
 | `DEEP_REVIEW_SKILL_PREFIX` | Skill name prefix | `deep-review:` |
+| `DEEP_REVIEW_SKIP_CI_GATE` | Skip the pre-ready local CI gate | unset |
 
 ## Session Folder
 
@@ -122,7 +127,7 @@ Each review session gets `./claude-reviews/<session-number>/`:
 | review | `Review.md` + `sub-reviews/*.md` |
 | remediation-plan | `Remediation-Plan.md` |
 | remediation | `Remediation.md` |
-| verify | `Verify.md` |
+| verify | `Verify.md`, `.local-ci-state` (local CI command + code hash, read by the pre-ready gate) |
 | integrate | `Integration.md` |
 
 Tool output is captured in `sub-reviews/.tool-output/`.

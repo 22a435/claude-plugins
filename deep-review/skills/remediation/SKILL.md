@@ -243,7 +243,7 @@ If re-triggered and `Remediation.md` already exists, first check for `Verify.md`
 
 ### Case A: Verify.md exists (targeted remediation)
 
-Verify has identified specific gaps -- failed checks, missed items, or remediations undone by integration.
+Verify has identified specific gaps -- failed checks, missed items, remediations undone by integration, or local CI failures. Local CI failures listed in Verify.md's "Local CI Failures" section are fixable items like any other gap -- including fixing the repo's local CI script itself if it is broken.
 
 1. Read `Verify.md` to find exactly what needs addressing
 2. Only fix the specific items listed in Verify.md -- do NOT re-run the full remediation plan

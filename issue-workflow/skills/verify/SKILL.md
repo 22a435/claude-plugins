@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Full verification suite -- re-runs all component checks, integration tests, and repo test suites. Documents failures and signals debug. Invoke with /issue-workflow:verify <issue-number>.
+description: Full verification suite -- re-runs all component checks, integration tests, repo test suites, and the repo's local CI script; records local CI state for the orchestrator's pre-ready gate. Documents failures and signals debug. Invoke with /issue-workflow:verify <issue-number>.
 disable-model-invocation: true
 allowed-tools: Read, Grep, Glob, Bash, Agent, Write, Edit
 ---
@@ -32,6 +32,7 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
   - `./claude-work/$0/Review.md` (if exists -- review feedback and requested changes)
   - `./claude-work/$0/Integration.md` (if exists -- integration changes, conflict resolutions)
 - **Output document:** `./claude-work/$0/Verify.md`
+- **Control file (also owned by this stage):** `./claude-work/$0/.local-ci-state` -- local CI command + code-state hash, read by the orchestrator before marking the PR ready. Like `.next-stage`, this is a sanctioned exception to the one-document rule.
 
 ## Instructions
 
@@ -67,17 +68,51 @@ Collect all results.
 
 ### Step 3: Run Full Verification Suite
 
-Run the end-of-plan verification checks sequentially:
+**First, discover the repo's local CI script.** Target repos run GitHub Actions only after the PR is marked ready for review, so the local CI script is the authoritative pre-merge check -- it must be green before this workflow completes. Look in this order:
+
+1. Documentation: the repo's CLAUDE.md or README (look for a documented local CI / check / verify command)
+2. `scripts/ci*` (e.g., `scripts/ci.sh`, `scripts/ci-local.sh`)
+3. A `ci` target in the Makefile (`make ci`)
+4. A `"ci"` script in package.json (`npm run ci`)
+5. If none exist, read `.github/workflows/*.yml` to see what CI runs and mirror those steps manually in the checks below -- but record `command=none` in the marker; never record a command that is not a real, repeatable single entry point in the repo.
+
+Record exactly one single-line shell command (e.g., `./scripts/ci.sh`), or `none`.
+
+**Skip rule (re-verification passes only):** before running the local CI script, compute the code-state hash (command in the marker block below) and compare it to the existing `./claude-work/$0/.local-ci-state`. If the file exists, `tree_hash` matches, and `status=green`, you may skip re-running the local CI script and record it as SKIPPED (code unchanged since last green run) in Verify.md. Never skip when the hash differs, the marker is missing, or the last status was not `green`.
+
+Then run the end-of-plan verification checks sequentially:
 1. End-to-end integration checks from the plan
-2. All existing repo test suites -- detect and run them:
+2. **The local CI script, in full** (unless validly skipped above). Capture its output. Where it already covers a suite below (tests, lint, typecheck), do not re-run that suite separately.
+3. All existing repo test suites NOT covered by the local CI script -- detect and run them:
    - `npm test`, `npm run test`, `pnpm test` (Node.js)
    - `pytest`, `python -m pytest` (Python)
    - `go test ./...` (Go)
    - `cargo test` (Rust)
    - `make test` (Makefile)
    - Check the repo's CLAUDE.md, README, or CI config for the correct test command
-3. Linting and type checking if configured in the repo
-4. Any other checks specified in the plan
+4. Linting and type checking if configured in the repo and not covered by the local CI script
+5. Any other checks specified in the plan
+
+**Write the local CI state marker.** Only this parent session writes it. Write it whenever the local CI outcome for the current tree is green, validly skipped, deferred, or "no script exists". Do NOT write or update it when you are routing a local CI failure to `debug` -- leave the previous marker (or its absence) in place so the state stays stale until a genuinely green run.
+
+```bash
+# If `git status --porcelain` shows uncommitted changes outside ./claude-work/,
+# a prior stage failed to commit its work -- commit those first, or the hash
+# will not describe the code you actually verified.
+TREE_HASH=$(git ls-tree -r HEAD | awk -F'\t' '$2 !~ /^claude-work\//' | sha256sum | awk '{print $1}')
+cat > ./claude-work/$0/.local-ci-state << EOF
+command=<single-line local CI command, or none>
+tree_hash=${TREE_HASH}
+status=<green | deferred | none>
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+```
+
+- `status=green` -- the local CI script ran against this tree and passed (or was validly skipped against an unchanged green tree)
+- `status=deferred` -- the local CI script failed, but every failure was deferred to follow-up issues per Step 4 (rare; requires the same explicit rationale as any deferral)
+- `status=none` -- the repo has no local CI script (`command=none`)
+
+The orchestrator reads this marker just before marking the PR ready: if the code hash no longer matches (something changed the code after your last green run), it re-runs the recorded command itself and, if red, re-enters the workflow at `verify`. Getting this marker right is what keeps red runs off GitHub Actions.
 
 ### Step 4: Handle Failures
 
@@ -92,6 +127,8 @@ If any verification check fails:
 
 - **(a) Route to `debug` to fix it now.** This is the default. The goal is to leave the codebase in the best working order regardless of bug origin.
 - **(b) File a follow-up issue and mark the row `DEFERRED-ISSUE #<n>`.** Only valid if the proper fix meets the Create-Issue criteria (tradeoffs the user should decide, architectural refactoring, high blast radius, team discussion, breaking upgrades, or benchmark-needed performance work) AND is truly out of scope for this PR. Option (b) requires explicit rationale in Verify.md; it is not the default.
+
+**Local CI failures are verification failures like any other:** document them (exact command, output tail, affected checks) and route to `debug`. This includes the case where the local CI script *itself* is broken or flaky -- fixing the repo's CI script is in scope (leave the codebase in the best working order regardless of origin). Deferring a local-CI failure follows the same rules as option (b) above; if ALL local CI failures are deferred, write the marker with `status=deferred` so the orchestrator can warn the user that GitHub Actions may show red once the PR is ready.
 
 To file a follow-up, apply the **Deferral hierarchy** (Workflow Context) -- search the backlog and prefer appending before creating:
 
@@ -120,6 +157,7 @@ If all remaining failures are deferred and there is nothing left for `debug` to 
 - **Status:** PASS / FAIL
 - **Components verified:** <N>/<total>
 - **Full suite:** PASS / FAIL
+- **Local CI:** <command> -- GREEN / FAIL / SKIPPED (code unchanged since last green run) / NONE (no script found)
 - **Test suites run:** <list>
 - **Failures requiring debug:** <N>
 - **Failures deferred to follow-up issues:** <N -- list numbers, or "none">
@@ -139,6 +177,7 @@ If all remaining failures are deferred and there is nothing left for `debug` to 
 | Check | Status | Details |
 |-------|--------|---------|
 | End-to-end: <description> | PASS/FAIL | <details> |
+| Local CI: <command> | PASS/FAIL/SKIPPED | <output summary> |
 | Existing tests: <suite> | PASS/FAIL | <output summary> |
 | Lint/typecheck | PASS/FAIL | <details> |
 
@@ -168,7 +207,7 @@ For each failure, provide enough context for the debug stage to investigate with
 ### Step 6: Commit, Push, and Comment
 
 ```bash
-git add ./claude-work/$0/Verify.md
+git add ./claude-work/$0/Verify.md ./claude-work/$0/.local-ci-state
 git commit -m "claude-work(verify): verification complete for issue #$0"
 git push
 ```
@@ -205,6 +244,8 @@ When running under the `work-issue` orchestrator, you can request a transition t
 ## Re-trigger Behavior
 
 If re-triggered (e.g., after a debug session, review changes, or integration), you MUST read `Debug.md`, `Review.md`, and/or `Integration.md` before running checks. These documents describe what changed since the last verification and should inform which areas need the closest attention.
+
+On every re-trigger, recompute the tree hash and apply the Step 3 skip rule against `.local-ci-state`: re-run the local CI script whenever the hash differs or the last status was not `green`, and update the marker after adjudicating the result.
 
 Append a new section:
 

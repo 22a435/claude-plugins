@@ -276,7 +276,7 @@ When running under the `work-issue` orchestrator, you can request a transition t
   ```bash
   echo "debug" > ./claude-work/$0/.next-stage
   ```
-  The orchestrator will run a debug session, then return to review for a fresh review pass.
+  The orchestrator will run a debug session, then return to review for a fresh review pass. Code changes made by that debug session do not require you to also signal `verify` afterward -- the orchestrator's pre-ready local CI gate re-checks the final code state (and re-runs local CI if it changed) before the PR is marked ready.
 - `verify` -- if Suggestion-level code changes were made during review (beyond documentation-only changes) but no Critical/Important issues were found:
   ```bash
   echo "verify" > ./claude-work/$0/.next-stage

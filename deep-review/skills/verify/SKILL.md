@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Verify remediations were applied correctly. Cross-references Remediation-Plan.md, Remediation.md, and actual code. Invoke with /deep-review:verify <session-number>.
+description: Verify remediations were applied correctly. Cross-references Remediation-Plan.md, Remediation.md, and actual code. Runs the repo's local CI script and records its state for the orchestrator's pre-ready gate. Invoke with /deep-review:verify <session-number>.
 disable-model-invocation: true
 allowed-tools: Read, Grep, Glob, Bash, Agent, Write, Edit
 ---
@@ -28,6 +28,7 @@ This skill is one stage of a multi-stage deep review workflow orchestrated by th
 - **Work directory:** `./claude-reviews/$0/`
 - **Input documents:** `./claude-reviews/$0/Remediation-Plan.md`, `./claude-reviews/$0/Remediation.md` (primary), plus Review.md and sub-reviews for context
 - **Output document:** `./claude-reviews/$0/Verify.md`
+- **Control file (also owned by this stage):** `./claude-reviews/$0/.local-ci-state` -- local CI command + code-state hash, read by the orchestrator before marking the PR ready. Like `.next-stage`, this is a sanctioned exception to the one-document rule. Running the local CI script does not conflict with the "No code edits" rule -- it only executes checks.
 
 ## Instructions
 
@@ -78,7 +79,48 @@ This mode runs after a rebase. Focus specifically on remediations that may have 
    - Record: INTACT (fix survived rebase), UNDONE (fix was lost/corrupted), or PARTIAL (fix partially present)
 4. **Remediations in unaffected files** can be marked SKIPPED (assumed intact)
 
-### Step 5: Write Verify.md
+### Step 5: Run Local CI
+
+Target repos run GitHub Actions only after the PR is marked ready for review, so the repo's local CI script is the authoritative pre-merge check -- it must be green before this workflow completes.
+
+**Discover the local CI script.** Look in this order:
+
+1. Documentation: the repo's CLAUDE.md or README (look for a documented local CI / check / verify command)
+2. `scripts/ci*` (e.g., `scripts/ci.sh`, `scripts/ci-local.sh`)
+3. A `ci` target in the Makefile (`make ci`)
+4. A `"ci"` script in package.json (`npm run ci`)
+5. If none exist, read `.github/workflows/*.yml` to see what CI runs and run those steps manually -- but record `command=none` in the marker; never record a command that is not a real, repeatable single entry point in the repo.
+
+Record exactly one single-line shell command (e.g., `./scripts/ci.sh`), or `none`.
+
+**Skip rule (re-verification passes only):** before running the local CI script, compute the code-state hash (command in the marker block below) and compare it to the existing `./claude-reviews/$0/.local-ci-state`. If the file exists, `tree_hash` matches, and `status=green`, you may skip re-running the local CI script and record it as SKIPPED (code unchanged since last green run) in Verify.md. Never skip when the hash differs, the marker is missing, or the last status was not `green`.
+
+**Run the local CI script in full** (unless validly skipped) and capture its output.
+
+**On failure:** document the failure as a gap in Verify.md's "Local CI Failures" section (exact command, output tail, affected checks) and signal `remediation` -- fixing local CI failures is remediation work, including the case where the local CI script *itself* is broken (leave the codebase in the best working order regardless of origin). Deferring a local-CI failure follows the Deferral hierarchy like any other finding; if ALL local CI failures are deferred, write the marker with `status=deferred` so the orchestrator can warn the user that GitHub Actions may show red once the PR is ready.
+
+**Write the local CI state marker.** Only this parent session writes it. Write it whenever the local CI outcome for the current tree is green, validly skipped, deferred, or "no script exists". Do NOT write or update it when you are routing a local CI failure to `remediation` -- leave the previous marker (or its absence) in place so the state stays stale until a genuinely green run.
+
+```bash
+# If `git status --porcelain` shows uncommitted changes outside ./claude-reviews/,
+# a prior stage failed to commit its work -- commit those first, or the hash
+# will not describe the code you actually verified.
+TREE_HASH=$(git ls-tree -r HEAD | awk -F'\t' '$2 !~ /^claude-reviews\//' | sha256sum | awk '{print $1}')
+cat > ./claude-reviews/$0/.local-ci-state << EOF
+command=<single-line local CI command, or none>
+tree_hash=${TREE_HASH}
+status=<green | deferred | none>
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+```
+
+- `status=green` -- the local CI script ran against this tree and passed (or was validly skipped against an unchanged green tree)
+- `status=deferred` -- the local CI script failed, but every failure was deferred to follow-up issues (rare; requires the same explicit rationale as any deferral)
+- `status=none` -- the repo has no local CI script (`command=none`)
+
+The orchestrator reads this marker just before marking the PR ready: if the code hash no longer matches (something changed the code after your last green run), it re-runs the recorded command itself and, if red, re-enters the workflow at `verify`. Getting this marker right is what keeps red runs off GitHub Actions.
+
+### Step 6: Write Verify.md
 
 Write `./claude-reviews/$0/Verify.md`:
 
@@ -92,7 +134,8 @@ Write `./claude-reviews/$0/Verify.md`:
 - **Failed:** <N>
 - **Missed (not attempted):** <N>
 - **Undone by integration:** <N> (post-integration mode only)
-- **Verdict:** ALL PASS / GAPS FOUND
+- **Local CI:** <command> -- GREEN / FAIL / SKIPPED (code unchanged since last green run) / NONE (no script found)
+- **Verdict:** ALL PASS / GAPS FOUND (ALL PASS requires local CI green, validly skipped, none, or deferred-with-rationale)
 
 ## Verification Results
 
@@ -117,19 +160,27 @@ Items in Remediation-Plan.md not accounted for in Remediation.md:
 - <remediation title> -- <what was lost and in which file>
 - ...
 
+## Local CI Failures
+For each failure, provide enough context for the remediation stage to investigate without re-running the checks:
+- **Command:** <exact local CI command>
+- **Error output:** <output tail>
+- **Affected checks:** <which parts of CI failed>
+- **Status:** TO-REMEDIATE | DEFERRED-ISSUE #<n> (with rationale for deferral)
+(Or: "None -- local CI green / skipped / no script found")
+
 ## Recommendation
 <"All remediations verified. Proceed to integration." or "Gaps found. Remediation should address the items listed above.">
 ```
 
-### Step 6: Commit and Push
+### Step 7: Commit and Push
 
 ```bash
-git add ./claude-reviews/$0/Verify.md
+git add ./claude-reviews/$0/Verify.md ./claude-reviews/$0/.local-ci-state
 git commit -m "claude-review(verify): verification complete [session #$0]"
 git push
 ```
 
-### Step 7: Comment on PR
+### Step 8: Comment on PR
 
 ```bash
 gh pr comment "claude/review/$0" --body "**Verification Complete**
@@ -143,10 +194,10 @@ gh pr comment "claude/review/$0" --body "**Verification Complete**
 See \`claude-reviews/$0/Verify.md\` for full details."
 ```
 
-### Step 8: Signal Transition
+### Step 9: Signal Transition
 
-- **If all remediations pass:** do not write a signal file (default transition to `integrate`)
-- **If gaps found** (failures, missed items, or remediations undone by integration): signal `remediation`
+- **If all remediations pass and local CI is green/skipped/none (or deferred with rationale):** do not write a signal file (default transition to `integrate`)
+- **If gaps found** (failures, missed items, remediations undone by integration, or local CI failures): signal `remediation`
   ```bash
   echo "remediation" > ./claude-reviews/$0/.next-stage
   ```
@@ -161,7 +212,7 @@ When running under the `deep-review` orchestrator, you can request a transition 
 - If you do not write this file, the orchestrator advances to `integrate` (default)
 
 **When to signal:**
-- `remediation` -- gaps were found (failed, missed, or undone remediations). Remediation will read Verify.md to see what needs addressing:
+- `remediation` -- gaps were found (failed, missed, or undone remediations, or local CI failures). Remediation will read Verify.md to see what needs addressing:
   ```bash
   echo "remediation" > ./claude-reviews/$0/.next-stage
   ```
@@ -174,7 +225,8 @@ If re-triggered and `Verify.md` already exists:
 1. Read existing Verify.md to understand prior verification results
 2. Determine the trigger context (post-remediation re-run or post-integration)
 3. Re-verify items that previously failed, were missed, or were newly applied
-4. Append a new section:
+4. Recompute the tree hash and apply the Step 5 skip rule against `.local-ci-state`: re-run the local CI script whenever the hash differs or the last status was not `green`, and update the marker after adjudicating the result
+5. Append a new section:
 
 ```
 ---

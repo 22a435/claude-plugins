@@ -92,7 +92,7 @@ git rebase --continue
 
 After a successful rebase, do a quick sanity check:
 - Ensure the code compiles/parses without errors
-- Run a quick smoke test if available
+- Run a quick smoke test if available -- the repo's local CI script (recorded in `./claude-work/$0/.local-ci-state`) is a good candidate if reasonably fast; the follow-up verify stage will run it in full regardless
 - Check that no files were accidentally deleted or duplicated
 
 ### Step 5: Force Push the Rebased Branch
