@@ -162,12 +162,16 @@ Stage transitions:
   Review signals verify when it makes code changes.
   Integrate signals done (main clean) or verify (after rebase).
   Skills signal non-default transitions via .next-stage file.
+  Before marking the PR ready, a local CI gate re-checks the code state;
+  stale state re-runs local CI inline, red re-enters verify, and the PR
+  stays draft if local CI cannot go green.
 
 Configuration (env vars):
   ISSUE_WORKFLOW_MODEL              Override model for all stages
   ISSUE_WORKFLOW_MODEL_<STAGE>      Override model for one stage (e.g., _RESEARCH)
   ISSUE_WORKFLOW_EFFORT_<STAGE>     Override effort for one stage
   ISSUE_WORKFLOW_SKILL_PREFIX       Skill name prefix (e.g., "issue-workflow:")
+  ISSUE_WORKFLOW_SKIP_CI_GATE       Set to skip the pre-ready local CI gate
   CLAUDE_PLUGINS_SKIP_UPDATE        Set to skip the startup marketplace refresh
 
 Auto-update:
@@ -391,6 +395,85 @@ clean_signal_file() {
   rm -f "${WORK_DIR}/.next-stage"
 }
 
+# ── Local CI pre-ready gate ───────────────────────────────────────
+# The verify skill records the repo's local CI command plus a content
+# hash of the validated tree in <work-dir>/.local-ci-state (committed).
+# Target repos only run GitHub Actions once a PR is marked ready, so
+# before `gh pr ready` we confirm local CI was run against the FINAL
+# code state -- catching e.g. a debug fix after review that was never
+# re-verified. Set ISSUE_WORKFLOW_SKIP_CI_GATE=1 to bypass.
+MAX_GATE_REENTRIES=2
+gate_reentries=0
+PR_STAY_DRAFT=false
+
+compute_tree_hash() {
+  # Content hash of the committed tree, excluding claude-work/ so that
+  # doc-only commits (Verify.md, Review.md, the marker itself) do not
+  # invalidate a green run. History-independent: rebases that preserve
+  # content keep the hash; any real code change produces a new one.
+  git ls-tree -r HEAD | awk -F'\t' '$2 !~ /^claude-work\//' | sha256sum | awk '{print $1}'
+}
+
+marker_field() {
+  grep -m1 "^${1}=" "${WORK_DIR}/.local-ci-state" 2>/dev/null | cut -d= -f2-
+}
+
+local_ci_gate() {
+  # Returns 0 -> safe to mark the PR ready; 1 -> re-enter at verify.
+  [[ -n "${ISSUE_WORKFLOW_SKIP_CI_GATE:-}" ]] && return 0
+
+  local marker="${WORK_DIR}/.local-ci-state"
+  if [[ ! -f "$marker" ]]; then
+    echo "[gate] No local CI marker (${marker}). Verify must establish local CI state."
+    return 1
+  fi
+
+  local cmd status recorded current
+  cmd="$(marker_field command)"
+  status="$(marker_field status)"
+  recorded="$(marker_field tree_hash)"
+
+  if [[ "$cmd" == "none" || -z "$cmd" ]]; then
+    echo "[gate] Repo has no local CI script (marker: command=none). Proceeding."
+    return 0
+  fi
+
+  current="$(compute_tree_hash)"
+  if [[ "$recorded" == "$current" ]]; then
+    if [[ "$status" == "deferred" ]]; then
+      echo "[gate] WARNING: local CI failures were deferred to follow-up issues."
+      echo "[gate] GitHub Actions may show red on this PR. See ${WORK_DIR}/Verify.md."
+    fi
+    echo "[gate] Local CI state is fresh (tree ${current:0:12}). Proceeding."
+    return 0
+  fi
+
+  # Stale: code changed since the last recorded local CI run. Cheap
+  # path first -- re-run the recorded command inline before paying for
+  # a full verify pipeline re-entry.
+  echo "[gate] Code changed since last local CI run (recorded ${recorded:0:12}, now ${current:0:12})."
+  echo "[gate] Re-running local CI inline: ${cmd}"
+  local log="/tmp/work-issue-${ISSUE}-local-ci-gate.log"
+  if bash -c "$cmd" >"$log" 2>&1; then
+    echo "[gate] Local CI GREEN against final tree. Updating marker."
+    cat > "$marker" << MARKER_EOF
+command=${cmd}
+tree_hash=${current}
+status=green
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+MARKER_EOF
+    git add "$marker"
+    git commit -m "claude-work(gate): local CI green at ${current:0:12} [#${ISSUE}]" >/dev/null
+    git push >/dev/null 2>&1 || true
+    rm -f "$log"
+    return 0
+  fi
+  echo "[gate] Local CI FAILED. Last 40 lines:"
+  tail -n 40 "$log"
+  echo "[gate] Full log: ${log}"
+  return 1
+}
+
 # ── Loop safety ───────────────────────────────────────────────────
 MAX_STAGE_RUNS=25
 stage_run_count=0
@@ -422,7 +505,26 @@ fi
 # ══════════════════════════════════════════════════════════════════
 #  MAIN STATE MACHINE
 # ══════════════════════════════════════════════════════════════════
-while [[ "$current_stage" != "done" ]]; do
+while true; do
+  # ── Pre-ready gate: intercept 'done' before leaving the loop ────
+  # done -> verify is an orchestrator-level re-entry (like --resume),
+  # not a skill transition, so it is not in ALLOWED_TRANSITIONS.
+  if [[ "$current_stage" == "done" ]]; then
+    if local_ci_gate; then
+      break
+    fi
+    gate_reentries=$((gate_reentries + 1))
+    if [[ $gate_reentries -gt $MAX_GATE_REENTRIES ]]; then
+      echo ""
+      echo "WARNING: local CI gate failed ${MAX_GATE_REENTRIES} times. Leaving the PR as a DRAFT."
+      PR_STAY_DRAFT=true
+      break
+    fi
+    echo "[gate] Re-entering the workflow at 'verify' (gate attempt ${gate_reentries}/${MAX_GATE_REENTRIES})."
+    current_stage="verify"
+    # fall through to normal stage execution
+  fi
+
   # Loop safety: global limit
   stage_run_count=$((stage_run_count + 1))
   if [[ $stage_run_count -gt $MAX_STAGE_RUNS ]]; then
@@ -569,9 +671,16 @@ done
 #  COMPLETE
 # ══════════════════════════════════════════════════════════════════
 
-# Mark the PR as ready for review (no longer draft)
-echo "Marking PR as ready for review..."
-gh pr ready "$BRANCH" 2>/dev/null && echo "PR marked as ready." || echo "WARNING: Could not mark PR as ready (may already be non-draft or PR not found)."
+# Mark the PR as ready for review (no longer draft) -- unless the
+# local CI gate could not confirm green against the final code state.
+if [[ "$PR_STAY_DRAFT" == "true" ]]; then
+  echo "NOT marking the PR ready: local CI is not confirmed green against the final code state."
+  echo "Fix locally (see /tmp/work-issue-${ISSUE}-local-ci-gate.log and ${WORK_DIR}/Verify.md),"
+  echo "then re-run: work-issue ${ISSUE} --resume verify"
+else
+  echo "Marking PR as ready for review..."
+  gh pr ready "$BRANCH" 2>/dev/null && echo "PR marked as ready." || echo "WARNING: Could not mark PR as ready (may already be non-draft or PR not found)."
+fi
 
 echo ""
 echo "═══════════════════════════════════════════════════════════"
@@ -579,7 +688,11 @@ echo "  Workflow complete for issue #${ISSUE}"
 echo "  Branch: ${BRANCH}"
 echo "  Work:   ${WORK_DIR}/"
 echo ""
-echo "  The PR is ready for final human review and merge."
+if [[ "$PR_STAY_DRAFT" == "true" ]]; then
+  echo "  The PR remains a DRAFT: local CI is not confirmed green."
+else
+  echo "  The PR is ready for final human review and merge."
+fi
 echo "  To re-run integration if main has moved:"
 echo "    work-issue ${ISSUE} --resume integrate"
 echo "═══════════════════════════════════════════════════════════"

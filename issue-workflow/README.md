@@ -68,7 +68,7 @@ setup -> research <-> interview <-> plan -> execute <-> debug <-> verify <-> rev
 | **plan** | opus[1m] | Draft implementation plan; requires user approval; opens draft PR |
 | **execute** | opus[1m] | Implement the plan with parallel subagents |
 | **debug** | opus[1m] | Root cause analysis and fix for escalated problems |
-| **verify** | opus[1m] | Full verification suite (component + integration + tests) |
+| **verify** | opus[1m] | Full verification suite (component + integration + tests + local CI script) |
 | **review** | opus[1m] | Code quality, security, and documentation review |
 | **integrate** | opus[1m] | Rebase onto main; resolve conflicts |
 
@@ -77,6 +77,10 @@ setup -> research <-> interview <-> plan -> execute <-> debug <-> verify <-> rev
 **Hard wall:** Once execution starts, no returning to pre-execution stages (research, interview, plan).
 
 **Stage transitions:** Skills write a stage name to `./claude-work/<issue>/.next-stage` to request non-default transitions. The orchestrator validates and follows the signal.
+
+### Local CI Gate
+
+The PR stays a draft until local CI is confirmed green against the final code state. The verify stage discovers the repo's local CI script (documented command in CLAUDE.md/README, `scripts/ci*`, `make ci`, or `npm run ci`), runs it, and records the command plus a tree-content hash (excluding `claude-work/`) in `.local-ci-state`. Just before `gh pr ready`, the orchestrator re-checks that hash: if code changed since the last green run, it re-runs local CI inline; if red, it re-enters the workflow at verify (max 2 re-entries), and if local CI still cannot go green the PR is left as a draft. This keeps red runs off GitHub Actions, which only fires once the PR is marked ready. Set `ISSUE_WORKFLOW_SKIP_CI_GATE=1` to bypass.
 
 ## Configuration
 
@@ -88,6 +92,7 @@ All configuration is via environment variables.
 | `ISSUE_WORKFLOW_MODEL_<STAGE>` | Override model for one stage | per-stage default |
 | `ISSUE_WORKFLOW_EFFORT_<STAGE>` | Override effort for one stage | per-stage default |
 | `ISSUE_WORKFLOW_SKILL_PREFIX` | Skill name prefix for conflicts | `issue-workflow:` |
+| `ISSUE_WORKFLOW_SKIP_CI_GATE` | Skip the pre-ready local CI gate | unset |
 | `CLAUDE_CODE_EFFORT_LEVEL` | Global effort override | `xhigh` |
 
 ## Work Directory
@@ -102,7 +107,7 @@ Each issue gets `./claude-work/<issue-number>/` with one document per stage:
 | plan | `Plan.md` |
 | execute | `Execute.md` |
 | debug | `Debug.md` |
-| verify | `Verify.md` |
+| verify | `Verify.md`, `.local-ci-state` (local CI command + code hash, read by the pre-ready gate) |
 | review | `Review.md` |
 | integrate | `Integration.md` |
 

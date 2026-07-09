@@ -77,6 +77,7 @@ Key orchestrator patterns:
 - **`refresh_env()`** -- re-sources PATH from a login shell after stages that install tools
 - **Trivial integration** -- if main hasn't diverged, the integrate stage skips Claude entirely and handles it inline in bash
 - **Debug origin tracking** -- `issue-workflow` saves which stage triggered debug in `.debug-origin` so debug can return to the correct stage
+- **Local CI pre-ready gate** -- `issue-workflow` and `deep-review` check a committed `.local-ci-state` marker (local CI command + tree-content hash excluding the work dir, written by the verify skill) before `gh pr ready`; stale state re-runs local CI inline or re-enters verify, and the PR stays draft if local CI cannot go green
 
 ### Skills (`skills/<stage>/SKILL.md`)
 
