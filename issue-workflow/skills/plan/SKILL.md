@@ -166,21 +166,37 @@ Based on the user's `AskUserQuestion` response:
 
 Only after the user explicitly approves the plan:
 
-Create a draft Pull Request:
+First resolve the merge target. Open the PR against the **configured target branch**, NOT against `main` unless `main` is the configured target.
+
+```bash
+# Precedence: env vars (set by the orchestrator) > .branch-meta.json > main.
+META="./claude-work/$0/.branch-meta.json"
+TARGET="${WF_TARGET:-$(jq -r '.wfTarget      // empty' "$META" 2>/dev/null)}"
+TARGET="${TARGET:-main}"
+STACK_PARENT_PR="${WF_STACK_PARENT_PR:-$(jq -r '.stackParentPR    // empty' "$META" 2>/dev/null)}"
+STACK_FINAL_TARGET="${WF_STACK_FINAL_TARGET:-$(jq -r '.stackFinalTarget // empty' "$META" 2>/dev/null)}"
+```
+
+Create a draft Pull Request against `$TARGET`:
 ```bash
 gh pr create \
   --title "Issue #$0: <issue title summary>" \
-  --body "<plan summary + 'Closes #$0'>" \
+  --body "<plan summary + issue-linking line (see below)>" \
   --draft \
-  --base main \
-  --head "claude/$0"
+  --base "$TARGET" \
+  --head "$(git branch --show-current)"
 ```
 
 The PR body should contain:
 - A concise summary of the plan (not the full plan)
 - List of components being implemented
-- `Closes #$0` to link the issue
+- An issue-linking line (see the stacking rule below)
 - Reference to `./claude-work/$0/Plan.md` for the full plan
+
+**Issue-linking line -- stacking-aware:**
+- **Not stacked** (`$STACK_PARENT_PR` empty): use `Closes #$0` so merging the PR closes the issue.
+- **Stacked** (`$STACK_PARENT_PR` set): the PR's base is a parent feature branch, so merging it into the parent must NOT close the umbrella issue. Use `Part of #$0` and `Stacked on #$STACK_PARENT_PR` instead, and add a visible banner at the top of the body:
+  `> :warning: **Stacked PR** -- base is parent feature branch \`$TARGET\`, NOT the final target \`$STACK_FINAL_TARGET\`. This merges into the parent; the feature reaches \`$STACK_FINAL_TARGET\` once the whole stack lands.`
 
 ## Stage Transition Signal
 

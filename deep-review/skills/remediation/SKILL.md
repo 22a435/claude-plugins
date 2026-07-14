@@ -214,7 +214,7 @@ git push
 Post a comprehensive summary to the PR thread:
 
 ```bash
-gh pr comment "claude/review/$0" --body "**Remediation Complete**
+gh pr comment --body "**Remediation Complete**
 
 - Remediations applied: <N>/<M>
 - Issues created: <N> (<list issue numbers>)

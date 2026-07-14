@@ -118,7 +118,7 @@ Note for each bundle whether it should be a **new** issue (then absorbed issues 
 git add ./claude-triages/$0/Cluster.md
 git commit -m "claude-triage(cluster): consolidate into <K> bundles [session #$0]"
 git push
-gh pr comment "claude/triage/$0" --body "**Cluster complete (session #$0):** proposed <A> closes, <B> merges, <K> consolidated bundles. Awaiting approval in interview before any GitHub changes."
+gh pr comment --body "**Cluster complete (session #$0):** proposed <A> closes, <B> merges, <K> consolidated bundles. Awaiting approval in interview before any GitHub changes."
 ```
 
 ## Stage Transition Signal

@@ -116,7 +116,7 @@ Process closes carefully and check each command's exit status; if a `gh` call fa
 git add ./claude-triages/$0/Triage.md
 git commit -m "claude-triage(consolidate): apply approved triage plan [session #$0]"
 git push
-gh pr comment "claude/triage/$0" --body "**Consolidate complete (session #$0):** created <C> bundles, closed <F> fixed / <D> duplicate / <A> absorbed. Open issues: <start> → <end>. Proceeding to verify."
+gh pr comment --body "**Consolidate complete (session #$0):** created <C> bundles, closed <F> fixed / <D> duplicate / <A> absorbed. Open issues: <start> → <end>. Proceeding to verify."
 ```
 
 ## Stage Transition Signal

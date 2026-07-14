@@ -70,11 +70,11 @@ setup -> inventory -> reconcile -> cluster -> interview -> consolidate -> verify
 | **interview** | opus[1m] | Present the full plan for approval -- **no GitHub mutations happen before this** |
 | **consolidate** | opus[1m] | Apply the approved plan: create bundles, close fixed/duplicate/absorbed issues |
 | **verify** | opus[1m] | Confirm GitHub state matches the approved plan; salvage failed operations |
-| **integrate** | opus[1m] | Rebase the report branch onto main if needed; mark PR ready |
+| **integrate** | opus[1m] | Rebase the report branch onto the target if needed; mark PR ready |
 
 ### State Machine
 
-The pre-consolidate stages can loop back for more depth (reconcile can ask inventory for fuller threads; cluster can send reconcile back to rework classifications). The **interview** stage is the approval gate: it advances to `consolidate` only when the plan is approved, and loops back to `cluster`/`reconcile` if the user wants re-planning. Verify loops back to `consolidate` if it finds gaps; otherwise advances to `integrate`. Integrate rebases the report branch onto main and finishes.
+The pre-consolidate stages can loop back for more depth (reconcile can ask inventory for fuller threads; cluster can send reconcile back to rework classifications). The **interview** stage is the approval gate: it advances to `consolidate` only when the plan is approved, and loops back to `cluster`/`reconcile` if the user wants re-planning. Verify loops back to `consolidate` if it finds gaps; otherwise advances to `integrate`. Integrate rebases the report branch onto the configured target branch and finishes.
 
 ### Inputs
 
@@ -82,6 +82,10 @@ The pre-consolidate stages can loop back for more depth (reconcile can ask inven
 |-------|-------------------|
 | Open GitHub issues | `gh issue list` + `gh issue view <n> --comments` (full thread, links followed) |
 | In-code TODOs | grep for `TODO`/`FIXME`/`XXX`/`HACK` (genuine work only; noise is skipped) |
+
+## Branching
+
+By default the report branch is cut from `origin/main` and its PR targets `main`. Set a single target with `--target <branch>`, `TRIAGE_TARGET_BRANCH`, or a `targetBranch` in a `.claude-workflows.json` at the repo root (e.g. land the triage report on `develop`); `branchPrefix` and `protectedBranches` from that file also apply. With no config and no `--target`, behavior is identical to before. Bump-routing and stacking are **issue-workflow** features; triage uses one configured target. See the [root CLAUDE.md](../CLAUDE.md) for the full config schema.
 
 ## Configuration
 
@@ -91,6 +95,8 @@ The pre-consolidate stages can loop back for more depth (reconcile can ask inven
 | `TRIAGE_MODEL_<STAGE>` | Override model for one stage | per-stage default |
 | `TRIAGE_EFFORT_<STAGE>` | Override effort for one stage | per-stage default |
 | `TRIAGE_SKILL_PREFIX` | Skill name prefix | `triage:` |
+| `TRIAGE_TARGET_BRANCH` | Merge target override (like `--target`) | `main` / config |
+| `TRIAGE_BRANCH_PREFIX` | Feature-branch prefix | `claude` / config |
 | `CLAUDE_PLUGINS_SKIP_UPDATE` | Skip the startup marketplace refresh | unset |
 
 ## Session Folder
@@ -121,5 +127,5 @@ Format: `claude-triage(<stage>): <description> [session #<N>]`
 
 ## Safety
 
-- A `PreToolUse` hook blocks `git push` to protected branches (main, master, production)
+- A `PreToolUse` hook blocks `git push` to protected branches (main, master, production by default, or the `protectedBranches` list in `.claude-workflows.json`)
 - The interview stage is a hard approval gate: nothing is closed or created on GitHub until the full plan is approved

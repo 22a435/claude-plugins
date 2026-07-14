@@ -183,7 +183,7 @@ git push
 ### Step 8: Comment on PR
 
 ```bash
-gh pr comment "claude/review/$0" --body "**Verification Complete**
+gh pr comment --body "**Verification Complete**
 
 - Remediations verified: <N>/<M>
 - Passed: <N>, Failed: <N>, Missed: <N>

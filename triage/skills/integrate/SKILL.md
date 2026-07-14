@@ -1,15 +1,15 @@
 ---
 name: integrate
-description: Prepare the triage report branch for merge -- rebase onto main if it has diverged, resolve any conflicts in the report docs. Invoke with /triage:integrate <session-number>.
+description: Prepare the triage report branch for merge -- rebase onto the configured target branch (default main) if it has diverged, resolve any conflicts in the report docs. Invoke with /triage:integrate <session-number>.
 disable-model-invocation: true
 allowed-tools: Read, Grep, Glob, Bash, Write, Edit
 ---
 
 # Integrate Phase
 
-You are performing the **integrate** stage of an issue-triage workflow. The triage's GitHub mutations are already applied and verified. Your job is to get the **report branch** (which carries the triage artifacts) into a mergeable state: rebase onto the latest `main` and resolve any conflicts in the `claude-triages/` documents.
+You are performing the **integrate** stage of an issue-triage workflow. The triage's GitHub mutations are already applied and verified. Your job is to get the **report branch** (which carries the triage artifacts) into a mergeable state: rebase onto the latest **configured target branch** (`$BASE_REF`, resolved in Step 0 -- by default `origin/main`, but the orchestrator may set it to `develop` or another branch) and resolve any conflicts in the `claude-triages/` documents.
 
-The orchestrator only invokes this skill when `main` has diverged from the branch; if it had not, integration was handled inline and this skill is skipped.
+The orchestrator only invokes this skill when the target branch has diverged from the report branch; if it had not, integration was handled inline and this skill is skipped.
 
 ## Workflow Context
 
@@ -31,14 +31,29 @@ This skill is one stage of a multi-stage issue-triage workflow orchestrated by t
 
 ## Instructions
 
-### Step 1: Rebase onto main
+### Step 0: Resolve the Target Branch
+
+Resolve the merge target ONCE into shell variables and use only those; never type `origin/main` again (the configured target may not be `main`).
 
 ```bash
-git fetch origin main
-git rebase origin/main
+# Precedence: env vars (set by the orchestrator) > .branch-meta.json
+# (recorded at setup) > origin/main (legacy default).
+META="./claude-triages/$0/.branch-meta.json"
+TARGET="${WF_TARGET:-$(jq -r '.wfTarget   // empty' "$META" 2>/dev/null)}"
+BASE_REF="${WF_BASE_REF:-$(jq -r '.wfBaseRef // empty' "$META" 2>/dev/null)}"
+TARGET="${TARGET:-main}"
+BASE_REF="${BASE_REF:-origin/$TARGET}"
+echo "Merge target: $TARGET   Base ref: $BASE_REF"
 ```
 
-The report docs live under `claude-triages/$0/` and are unlikely to conflict with `main`. If a conflict does occur (e.g., another triage session touched a shared file), resolve it preserving **both** sets of changes -- triage reports are append-only artifacts; never discard another session's content. Continue the rebase to completion.
+### Step 1: Rebase onto the Target Branch
+
+```bash
+git fetch origin "$TARGET"
+git rebase "$BASE_REF"
+```
+
+The report docs live under `claude-triages/$0/` and are unlikely to conflict with the target branch. If a conflict does occur (e.g., another triage session touched a shared file), resolve it preserving **both** sets of changes -- triage reports are append-only artifacts; never discard another session's content. Continue the rebase to completion.
 
 If the rebase is hopeless, abort it (`git rebase --abort`) and record that integration needs manual attention in `Integration.md`, then still proceed to write the report and finish (do not loop forever).
 
@@ -70,12 +85,12 @@ Compare against the "Final Open Backlog" count in `Verify.md`. Note any drift (d
 
 ```bash
 git add ./claude-triages/$0/Integration.md
-git commit -m "claude-triage(integrate): rebase report branch onto main [session #$0]"
+git commit -m "claude-triage(integrate): rebase report branch onto ${TARGET} [session #$0]"
 git push --force-with-lease
-gh pr comment "claude/triage/$0" --body "**Integrate complete (session #$0):** branch rebased onto main and ready for merge."
+gh pr comment --body "**Integrate complete (session #$0):** branch rebased onto \`${TARGET}\` and ready for merge."
 ```
 
-(`--force-with-lease` is required because the rebase rewrote history; it is safe on this session branch and the protected-branch hook still blocks pushes to main/master/production.)
+(`--force-with-lease` is required because the rebase rewrote history; it is safe on this session branch, and the protected-branch hook still blocks pushes to protected branches. Only ever push this session branch, never the target branch.)
 
 ## Stage Transition Signal
 

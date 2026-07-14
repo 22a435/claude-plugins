@@ -271,7 +271,7 @@ Based on the response:
 ### Step 8: Post PR Comment (after approval)
 
 ```bash
-gh pr comment "claude/review/$0" --body "**Remediation Plan Approved**
+gh pr comment --body "**Remediation Plan Approved**
 
 - Fix now: <N> items
 - Create issues: <N> items

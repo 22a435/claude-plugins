@@ -122,6 +122,7 @@ EFFORT="${CLAUDE_CODE_EFFORT_LEVEL:-xhigh}"
 EFFORT_EXPLICIT=false
 RESUME_FROM=""
 SESSION_EXPLICIT=""
+CLI_TARGET=""   # --target <branch>  (merge target override; default main/config)
 
 # ── Usage / help ──────────────────────────────────────────────────
 usage() {
@@ -138,6 +139,7 @@ Options:
   --model <model>    Override model for all stages (e.g., sonnet, fable[1m])
   --resume <stage>   Resume from a specific stage (requires --session)
   --session <N>      Use a specific session number (auto-increments if omitted)
+  --target <branch>  Merge target branch (default: main, or per-repo config)
   --help             Show this help message
 
 Stages:
@@ -148,21 +150,30 @@ Stages:
   interview      Present the full triage plan for approval (no GitHub mutations yet)
   consolidate    Apply the approved closes/merges/new issues on GitHub
   verify         Confirm GitHub state matches the approved plan; salvage failed ops
-  integrate      Rebase report branch onto main if needed; mark PR ready
+  integrate      Rebase report branch onto the target if needed; mark PR ready
 
 Stage transitions:
   Pre-consolidate stages (inventory/reconcile/cluster) can loop back for more depth.
   Interview can loop back to cluster/reconcile if the user wants re-planning.
   Interview advances to consolidate only after the full plan is approved.
   Verify loops to consolidate if it finds gaps; advances to integrate if all match.
-  Integrate handles rebase onto main; advances to done.
+  Integrate handles rebase onto the target branch; advances to done.
   Skills signal non-default transitions via .next-stage file.
+
+Branching:
+  By default this cuts a branch from origin/main and opens the report PR
+  against main. Drop a .claude-workflows.json at the repo root to change the
+  target branch, feature-branch prefix, and protected branches. With no
+  config and no --target, behavior is identical to before. (Bump routing and
+  stacking are issue-workflow features; triage uses a single target.)
 
 Configuration (env vars):
   TRIAGE_MODEL                Override model for all stages
   TRIAGE_MODEL_<STAGE>        Override model for one stage (e.g., _CLUSTER)
   TRIAGE_EFFORT_<STAGE>       Override effort for one stage
   TRIAGE_SKILL_PREFIX         Skill name prefix (e.g., "triage:")
+  TRIAGE_TARGET_BRANCH        Merge target override (like --target)
+  TRIAGE_BRANCH_PREFIX        Feature-branch prefix (default "claude")
   CLAUDE_PLUGINS_SKIP_UPDATE  Set to skip the startup marketplace refresh
 
 Auto-update:
@@ -177,6 +188,7 @@ Examples:
   triage --model fable[1m]                  # Use fable for all stages
   triage --resume cluster --session 3      # Resume session 3 from clustering
   triage --resume interview --session 1    # Re-run the approval gate for session 1
+  triage --target develop                  # Cut from / merge report into develop
 EOF
   exit "${1:-0}"
 }
@@ -196,6 +208,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --resume) RESUME_FROM="${2:?--resume requires a stage name}"; shift 2 ;;
     --session) SESSION_EXPLICIT="${2:?--session requires a number}"; shift 2 ;;
+    --target) CLI_TARGET="${2:?--target requires a branch name}"; shift 2 ;;
     --help)   usage 0 ;;
     *)        echo "Error: unknown option: $1"; usage 1 ;;
   esac
@@ -257,7 +270,22 @@ else
 fi
 
 WORK_DIR="${TRIAGE_BASE}/${SESSION}"
-BRANCH="claude/triage/${SESSION}"
+
+# ── Resolve branching model (target/base branch, feature-branch prefix) ──
+# triage carries only report docs; it uses a single configured target
+# (default main). Set one with --target, TRIAGE_TARGET_BRANCH, or a
+# .claude-workflows.json at the repo root. No --bump or stacking.
+WF_TARGET_OVERRIDE="${TRIAGE_TARGET_BRANCH:-}"
+WF_PREFIX_OVERRIDE="${TRIAGE_BRANCH_PREFIX:-}"
+# shellcheck source=_branch-lib.sh
+source "${SCRIPT_DIR}/_branch-lib.sh"
+resolve_branches || { echo "Error: could not resolve target branch."; exit 1; }
+# On --resume, reuse the base the branch was set up with (recorded at setup).
+if [[ -n "$RESUME_FROM" ]]; then
+  load_branch_meta "$WORK_DIR" || true
+fi
+
+BRANCH="${WF_BRANCH_PREFIX}/triage/${SESSION}"
 GITHUB_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "unknown")"
 
 # ── Banner ────────────────────────────────────────────────────────
@@ -266,6 +294,7 @@ echo "════════════════════════�
 echo "  Triage Session #${SESSION}"
 echo "  Repo:   ${GITHUB_REPO}"
 echo "  Branch: ${BRANCH}"
+echo "  Target: ${WF_TARGET}"
 echo "  Effort: ${EFFORT}"
 [[ -n "$RESUME_FROM" ]] && echo "  Resume: from ${RESUME_FROM}"
 echo "═══════════════════════════════════════════════════════════"
@@ -366,7 +395,7 @@ fi
 
 # ── Ensure correct branch (needed for resume or wrong checkout) ──
 if [[ "$current_stage" != "setup" ]]; then
-  git fetch origin main 2>/dev/null || true
+  git fetch origin "$WF_TARGET" 2>/dev/null || true
   current_branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
   if [[ "$current_branch" != "$BRANCH" ]]; then
     if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
@@ -420,19 +449,23 @@ while [[ "$current_stage" != "done" ]]; do
   case "$current_stage" in
     # ── SETUP (inline -- unique logic, not a skill) ────────────
     setup)
-      # Create or switch to branch
-      git fetch origin main 2>/dev/null || true
+      # Create or switch to branch. Cut from the resolved base ref
+      # (origin/<target>, default origin/main).
+      git fetch origin "$WF_TARGET" 2>/dev/null || true
       if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
         echo "Branch ${BRANCH} exists. Switching to it."
         git checkout "$BRANCH"
         git pull origin "$BRANCH" 2>/dev/null || true
       else
-        echo "Creating branch ${BRANCH} from origin/main."
-        git checkout -b "$BRANCH" origin/main
+        echo "Creating branch ${BRANCH} from ${WF_BASE_REF}."
+        git checkout -b "$BRANCH" "$WF_BASE_REF"
       fi
 
       # Create work directory
       mkdir -p "${WORK_DIR}"
+
+      # Record the resolved branching decision so --resume reuses this base.
+      write_branch_meta "$WORK_DIR"
 
       # Write Session.md
       cat > "${WORK_DIR}/Session.md" << SESSION_EOF
@@ -441,11 +474,12 @@ while [[ "$current_stage" != "done" ]]; do
 ## Source
 - **Repository:** ${GITHUB_REPO}
 - **Branch:** \`${BRANCH}\`
+- **Merge target:** \`${WF_TARGET}\`
 - **Started:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 SESSION_EOF
 
       # Commit and push
-      git add "${WORK_DIR}/Session.md"
+      git add "${WORK_DIR}/Session.md" "${WORK_DIR}/.branch-meta.json"
       git commit -m "claude-triage: begin triage session #${SESSION}"
       git push -u origin "$BRANCH"
 
@@ -454,7 +488,7 @@ SESSION_EOF
         gh pr create --draft \
           --title "Triage session #${SESSION}" \
           --body "Automated issue triage / consolidation. Report artifacts live under \`claude-triages/${SESSION}/\`. GitHub issue mutations are applied only after the plan is approved in the interview stage." \
-          --base main --head "$BRANCH" 2>/dev/null \
+          --base "$WF_TARGET" --head "$BRANCH" 2>/dev/null \
           && echo "Draft PR created." \
           || echo "WARNING: could not create draft PR (continuing; stages will retry comments)."
       fi
@@ -468,30 +502,30 @@ SESSION_EOF
       current_stage="inventory"
       ;;
 
-    # ── TRIVIAL INTEGRATION (inline -- skip Claude when main hasn't moved)
+    # ── TRIVIAL INTEGRATION (inline -- skip Claude when target hasn't moved)
     integrate)
-      git fetch origin main 2>/dev/null || true
-      diverged_commits=$(git log --oneline HEAD..origin/main 2>/dev/null | wc -l)
+      git fetch origin "$WF_TARGET" 2>/dev/null || true
+      diverged_commits=$(git log --oneline "HEAD..${WF_BASE_REF}" 2>/dev/null | wc -l)
       if [[ $diverged_commits -eq 0 ]]; then
-        echo "  Main has not diverged. Handling integration inline (no Claude session needed)."
+        echo "  ${WF_BASE_REF} has not diverged. Handling integration inline (no Claude session needed)."
 
         cat > "${WORK_DIR}/Integration.md" << INTEG_EOF
 # Integration Report: Triage Session #${SESSION}
 
 ## Summary
-Main has not diverged. No integration needed. Branch is ready for merge.
+\`${WF_BASE_REF}\` has not diverged. No integration needed. Branch is ready for merge.
 INTEG_EOF
 
         git add "${WORK_DIR}/Integration.md"
         git commit -m "claude-triage(integrate): no integration needed [session #${SESSION}]"
         git push
-        gh pr comment "$BRANCH" --body "**Integration:** Main has not diverged. No integration needed. Branch is ready for merge." 2>/dev/null || true
+        gh pr comment "$BRANCH" --body "**Integration:** \`${WF_BASE_REF}\` has not diverged. No integration needed. Branch is ready for merge." 2>/dev/null || true
 
         echo "done" > "${WORK_DIR}/.next-stage"
         previous_stage="$current_stage"
         current_stage="$(resolve_next_stage "$current_stage")"
       else
-        echo "  Main has diverged (${diverged_commits} new commits). Launching Claude for integration."
+        echo "  ${WF_BASE_REF} has diverged (${diverged_commits} new commits). Launching Claude for integration."
 
         clean_signal_file
         claude --model "$stage_model" --effort "$stage_effort" "${STAGE_SKILL[$current_stage]} ${SESSION}"

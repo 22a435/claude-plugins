@@ -253,7 +253,7 @@ git push
 
 Post summary to PR:
 ```bash
-gh pr comment "claude/review/$0" --body "**Interview:** <N> decisions recorded. <N> tools approved. Priority: <top priorities>. Focus areas: <areas>."
+gh pr comment --body "**Interview:** <N> decisions recorded. <N> tools approved. Priority: <top priorities>. Focus areas: <areas>."
 ```
 
 ## Stage Transition Signal
