@@ -1,0 +1,70 @@
+# ─────────────────────────────────────────────────────────────────
+# branchflow -- eager cascade + reconcile (optional)
+# ─────────────────────────────────────────────────────────────────
+# Copy to .github/workflows/branchflow.yml in your repo to keep the
+# release-train invariant (major ⊇ minor ⊇ patch) true continuously:
+#
+#   - push to an accumulator (patch/minor/major)  -> cascade it upward
+#   - push to the release branch (main)           -> tag + reconcile down
+#
+# All merges are PRs with auto-merge enabled; nothing is force-pushed, so
+# this coexists with branch protection. Clean forward-merges land on their
+# own; conflicting ones open a PR for a human (no Claude runs in CI).
+#
+# Requirements:
+#   - A checkout of the branchflow CLI on PATH (see the "Get branchflow"
+#     step -- adjust to how you vendor/install it).
+#   - A token that can open and auto-merge PRs. The default GITHUB_TOKEN
+#     works if "Allow auto-merge" is enabled and required checks are set;
+#     for cross-workflow triggers you may prefer a PAT / app token.
+#   - Match the branch names below to your .claude-workflows.json.
+# ─────────────────────────────────────────────────────────────────
+name: branchflow
+
+on:
+  push:
+    branches:
+      - main       # releaseBranch  -> reconcile
+      - major      # updateBranches  -> cascade up
+      - minor
+      - patch
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  branchflow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # branchflow compares whole branch histories
+          fetch-tags: true      # and reads the latest release tag
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "branchflow-bot"
+          git config user.email "branchflow@users.noreply.github.com"
+
+      # Adjust this to however you make the `branchflow` CLI available --
+      # vendored copy, release artifact, or `claude plugin install` +
+      # symlink. It only needs git, gh, and jq at runtime (all preinstalled
+      # on ubuntu-latest); claude is optional and skipped in CI.
+      - name: Get branchflow
+        run: |
+          git clone --depth 1 https://github.com/22a435/claude-plugins /tmp/cp
+          echo "/tmp/cp/branchflow/bin" >> "$GITHUB_PATH"
+
+      - name: Cascade or reconcile
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAUDE_PLUGINS_SKIP_UPDATE: "1"
+        run: |
+          branch="${GITHUB_REF_NAME}"
+          if [ "$branch" = "main" ]; then
+            branchflow reconcile --auto-merge --yes
+          else
+            branchflow cascade "$branch" --auto-merge --yes
+          fi

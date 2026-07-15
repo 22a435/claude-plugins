@@ -1,0 +1,548 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# ═══════════════════════════════════════════════════════════════════
+# branchflow - release-train orchestrator for the 22a435 workflows
+# ═══════════════════════════════════════════════════════════════════
+# Usage: branchflow <command> [options]
+#
+# Manages semver "update branches" (major/minor/patch accumulators) or a
+# single develop/staging line: keeps lower lines cascaded up into higher
+# ones, and promotes a line into the release branch with a version bump.
+#
+# Model (see branchflow/README.md):
+#   - Invariant: major ⊇ minor ⊇ patch (content) at all times.
+#   - Up-flow (cascade): a change in a lower line is forward-merged up.
+#   - Down-flow (reconcile): when the release branch moves, every
+#     accumulator merges it back in.
+#   - Everything is MERGE-ONLY and PR-DRIVEN. Accumulators are never
+#     force-pushed, so this coexists with strict branch protection.
+#
+# Config lives in the target repo's .claude-workflows.json (shared with
+# the feature plugins). Commands:
+#   init       Create the accumulator branches and scaffold config
+#   status     Show pending work, the invariant matrix, and versions
+#   cascade    Forward-merge lower lines up into higher ones (via PRs)
+#   promote    Open a version-bump PR from a line into the release branch
+#   reconcile  Tag a merged release and merge the release branch down
+#
+# Part of the branchflow plugin for Claude Code.
+# https://github.com/22a435/claude-plugins
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Self-location ─────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PLUGIN_ROOT="$(dirname "$SCRIPT_DIR")"
+
+_PREFIX="${BRANCHFLOW_SKILL_PREFIX:-branchflow:}"
+RESOLVE_SKILL="/${_PREFIX}resolve-merge"
+CHANGELOG_SKILL="/${_PREFIX}changelog"
+
+# Model + effort for the Claude-assisted stages (conflict resolution,
+# changelog). Overridable via env, matching the other plugins' pattern.
+BRANCHFLOW_MODEL="${BRANCHFLOW_MODEL:-opus[1m]}"
+BRANCHFLOW_EFFORT="${BRANCHFLOW_EFFORT:-${CLAUDE_CODE_EFFORT_LEVEL:-high}}"
+
+# ── Usage ─────────────────────────────────────────────────────────
+usage() {
+  cat <<'EOF'
+Usage: branchflow <command> [options]
+
+Manage semver update branches (major/minor/patch) or a single develop line,
+and cut version-bump release PRs into the release branch. Merge-only and
+PR-driven -- accumulators are never force-pushed.
+
+Commands:
+  init                 Create accumulator branches off the release branch and
+                       scaffold/patch .claude-workflows.json + protected list
+  status [--check]     Show each line's pending diff vs the release branch, the
+                       invariant matrix (is every lower line contained in the
+                       higher ones?), and current/next versions.
+                       --check exits non-zero if the invariant is violated.
+  cascade [<level>]    Forward-merge lower lines UP into higher ones via PRs.
+                       Opens a PR per hop (conflicts get a Claude-resolved PR);
+                       add --auto-merge to land clean ones automatically. With
+                       no <level>, cascades every line.
+  promote <level|bump> Open a PR from the line into the release branch with a
+                       version bump. Refuses if the invariant is violated
+                       (cascade first) unless --force. Options:
+                         --auto-merge   merge the PR when checks pass (if the
+                                        environment allows it), then finalize
+                         --force        bypass the invariant gate (with confirm)
+                         --yes          skip interactive confirmations
+  reconcile [--version <v>]
+                       Tag a just-merged release on the release branch, then
+                       merge the release branch DOWN into every accumulator
+                       (via PRs). Run after a release PR merges, or on a hotfix.
+
+Global options:
+  --repo-dir <path>    Operate on this repo (default: current git repo)
+  -h, --help           Show this help
+
+Configuration (.claude-workflows.json at the target repo root):
+  releaseBranch                Released/tagged line (default "main")
+  targetBranch                 Single develop/staging line (single-line mode)
+  updateBranches {major,minor,patch}   Accumulator branch names (trains mode)
+  protectedBranches [ ... ]    Branches the push-guard hook blocks
+  release.versionFrom          "tag" (default) or a version file
+  release.versionFile          File promote bumps (e.g. package.json); "none"
+  release.tagPrefix            Tag prefix (default "v")
+  release.changelogFile        Changelog promote maintains (optional)
+
+Env vars:
+  BRANCHFLOW_MODEL / BRANCHFLOW_EFFORT   Model/effort for Claude-assisted steps
+  BRANCHFLOW_SKILL_PREFIX                Skill name prefix (default "branchflow:")
+  CLAUDE_PLUGINS_SKIP_UPDATE             Skip the startup marketplace refresh
+
+Examples:
+  branchflow init
+  branchflow status
+  branchflow cascade patch          # push a patch fix up into minor + major
+  branchflow promote minor          # open a minor-bump release PR into main
+  branchflow reconcile              # after the release PR merges: tag + sync down
+EOF
+  exit "${1:-0}"
+}
+
+# ── Parse command + args ──────────────────────────────────────────
+[[ $# -lt 1 ]] && usage 1
+COMMAND=""
+CMD_ARG=""
+FLAG_CHECK=false
+FLAG_AUTO_MERGE=false
+FLAG_FORCE=false
+FLAG_YES=false
+OPT_VERSION=""
+REPO_DIR_OVERRIDE=""
+
+case "$1" in
+  -h|--help) usage 0 ;;
+  init|status|cascade|promote|reconcile) COMMAND="$1"; shift ;;
+  *) echo "Error: unknown command '$1'"; usage 1 ;;
+esac
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --check)      FLAG_CHECK=true; shift ;;
+    --auto-merge) FLAG_AUTO_MERGE=true; shift ;;
+    --force)      FLAG_FORCE=true; shift ;;
+    --yes|-y)     FLAG_YES=true; shift ;;
+    --version)    OPT_VERSION="${2:?--version requires a value}"; shift 2 ;;
+    --repo-dir)   REPO_DIR_OVERRIDE="${2:?--repo-dir requires a path}"; shift 2 ;;
+    -h|--help)    usage 0 ;;
+    -*)           echo "Error: unknown option '$1'"; usage 1 ;;
+    *)            if [[ -z "$CMD_ARG" ]]; then CMD_ARG="$1"; shift; else echo "Error: unexpected argument '$1'"; usage 1; fi ;;
+  esac
+done
+
+# ── Validate environment ──────────────────────────────────────────
+# claude is a SOFT dependency: only the conflict-resolution and changelog
+# steps use it. Clean cascade/reconcile/status/init run without it, so
+# branchflow works in CI (e.g. the eager-cascade Action) with just gh/git/jq.
+for cmd in gh git jq; do
+  command -v "$cmd" >/dev/null 2>&1 || { echo "Error: required command '${cmd}' not found"; exit 1; }
+done
+have_claude() { command -v claude >/dev/null 2>&1; }
+
+if [[ -n "$REPO_DIR_OVERRIDE" ]]; then cd "$REPO_DIR_OVERRIDE" || { echo "Error: cannot cd to ${REPO_DIR_OVERRIDE}"; exit 1; }; fi
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "Error: not inside a git repository"; exit 1; }
+cd "$REPO_ROOT"
+
+# shellcheck source=_branchflow-lib.sh
+source "${SCRIPT_DIR}/_branchflow-lib.sh"
+bf_load_config
+
+# ── Plugin self-update (fresh runs only; needs claude) ────────────
+if [[ -z "${CLAUDE_PLUGINS_SKIP_UPDATE:-}" ]] && have_claude; then
+  timeout --kill-after=5 20 claude plugin marketplace update 22a435-workflows </dev/null >/dev/null 2>&1 || true
+  timeout --kill-after=5 20 claude plugin update branchflow@22a435-workflows </dev/null >/dev/null 2>&1 || true
+fi
+
+# ── Shared helpers ────────────────────────────────────────────────
+confirm() {
+  # confirm <prompt> ; honored unless --yes. Returns 0 if the user agrees.
+  [[ "$FLAG_YES" == "true" ]] && return 0
+  local reply
+  read -rp "$1 [y/N] " reply
+  [[ "$reply" =~ ^[Yy] ]]
+}
+
+banner() {
+  echo ""
+  echo "═══════════════════════════════════════════════════════════"
+  echo "  branchflow ${COMMAND}${CMD_ARG:+ ${CMD_ARG}}"
+  echo "  Repo:    $(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "$REPO_ROOT")"
+  echo "  Release: ${BF_RELEASE_BRANCH}   Mode: ${BF_MODE}"
+  echo "═══════════════════════════════════════════════════════════"
+  echo ""
+}
+
+require_configured() {
+  if [[ "$BF_MODE" == "none" ]]; then
+    echo "Error: no branching model configured."
+    echo "Add updateBranches (major/minor/patch) or targetBranch to ${BF_CONFIG_FILE}."
+    exit 1
+  fi
+}
+
+# All accumulator branches for the active mode, low->high (single -> one).
+bf_active_branches() {
+  if [[ "$BF_MODE" == "trains" ]]; then
+    local lvl; for lvl in "${BF_LEVELS[@]}"; do bf_branch_for_level "$lvl"; done
+  elif [[ "$BF_MODE" == "single" ]]; then
+    echo "$BF_SINGLE_TARGET"
+  fi
+}
+
+# Merge <head> into <base> via a PR. Auto-merges clean; on conflict, opens a
+# Claude-resolved PR off <base>. Never pushes directly to <base>.
+#   $1 head  $2 base  $3 kind (cascade|reconcile)  $4 auto (true/false)
+merge_via_pr() {
+  local head="$1" base="$2" kind="$3" auto="$4"
+  bf_fetch "$head" "$base"
+
+  if ! bf_remote_has "$base"; then echo "  [skip] origin/${base} does not exist."; return 0; fi
+  if ! bf_remote_has "$head"; then echo "  [skip] origin/${head} does not exist."; return 0; fi
+
+  local ahead; ahead="$(bf_content_ahead "origin/${base}" "origin/${head}")"
+  if [[ "$ahead" -eq 0 ]]; then echo "  [ok] ${base} already contains ${head}'s changes."; return 0; fi
+
+  local existing; existing="$(bf_open_pr_number "$head" "$base")"
+  if [[ -n "$existing" ]]; then echo "  [pr] #${existing} already open (${head} -> ${base}); leaving it."; return 0; fi
+
+  bf_mergeable "origin/${base}" "origin/${head}"; local mrc=$?
+  if [[ $mrc -eq 0 ]]; then
+    echo "  [clean] ${head} -> ${base}: opening PR."
+    local pr_url pr_num
+    pr_url="$(gh pr create --base "$base" --head "$head" \
+      --title "branchflow(${kind}): ${head} -> ${base}" \
+      --body "Automated ${kind} merge by branchflow. Fast-forwardable / conflict-free." 2>/dev/null)" || {
+        echo "  [warn] could not open PR ${head} -> ${base} (check permissions)."; return 1; }
+    pr_num="${pr_url##*/}"   # merge by NUMBER: a head can front several PRs (e.g. reconcile)
+    echo "  [pr] ${pr_url}"
+    if [[ "$auto" == "true" ]]; then
+      if gh pr merge "$pr_num" --merge --auto >/dev/null 2>&1; then
+        echo "  [auto-merge] enabled for #${pr_num} (${head} -> ${base})."
+      else
+        echo "  [note] auto-merge unavailable; merge PR #${pr_num} manually."
+      fi
+    fi
+    return 0
+  fi
+
+  # Conflict path. Try Claude if available; on any failure, fall through to a
+  # plain PR for a human to resolve on GitHub. The base is never force-pushed.
+  if have_claude; then
+    echo "  [conflict] ${head} -> ${base}: launching Claude to resolve."
+    local rb="branchflow/${kind}/${head//\//-}-into-${base//\//-}"
+    git fetch origin "+refs/heads/${base}:refs/remotes/origin/${base}" >/dev/null 2>&1 || true
+    git branch -f "$rb" "origin/${base}" >/dev/null 2>&1
+    git checkout -q "$rb"
+    git merge --no-commit --no-ff "origin/${head}" >/dev/null 2>&1 || true   # leaves conflicts staged
+    claude --model "$BRANCHFLOW_MODEL" --effort "$BRANCHFLOW_EFFORT" \
+      "${RESOLVE_SKILL} ${head} ${base} ${kind}"
+    if git diff --check >/dev/null 2>&1 && ! git ls-files -u | grep -q .; then
+      git commit -q --no-edit 2>/dev/null || git commit -qm "branchflow(${kind}): merge ${head} into ${base}"
+      if git push -q -u origin "$rb" 2>/dev/null; then
+        local pr_url
+        pr_url="$(gh pr create --base "$base" --head "$rb" \
+          --title "branchflow(${kind}): resolve ${head} -> ${base}" \
+          --body "Conflict resolution for the ${kind} merge of \`${head}\` into \`${base}\`, prepared by branchflow + Claude. Review the resolution before merging." 2>/dev/null)" || echo "  [warn] could not open resolution PR."
+        [[ -n "${pr_url:-}" ]] && echo "  [pr] ${pr_url} (needs review)"
+        git checkout -q "$BF_RELEASE_BRANCH" 2>/dev/null || true
+        return 0
+      fi
+      echo "  [warn] could not push ${rb}."
+    else
+      echo "  [note] automatic resolution incomplete; falling back to a manual PR."
+    fi
+    # Clean up: abort any in-progress merge, return to the release branch,
+    # and drop the throwaway branch so nothing is left half-merged.
+    git merge --abort >/dev/null 2>&1 || true
+    git checkout -q --force "$BF_RELEASE_BRANCH" >/dev/null 2>&1 || true
+    git branch -D "$rb" >/dev/null 2>&1 || true
+  else
+    echo "  [conflict] ${head} -> ${base}: claude unavailable; opening a PR for manual resolution."
+  fi
+
+  # Manual fallback: a plain PR head->base for a human to resolve on GitHub.
+  local existing2; existing2="$(bf_open_pr_number "$head" "$base")"
+  if [[ -z "$existing2" ]]; then
+    gh pr create --base "$base" --head "$head" \
+      --title "branchflow(${kind}): ${head} -> ${base} (conflicts -- needs manual merge)" \
+      --body "Automated ${kind} merge of \`${head}\` into \`${base}\` has conflicts that were not resolved automatically. Resolve this PR on GitHub, or run \`branchflow ${kind}\` locally where claude is installed." >/dev/null 2>&1 \
+      && echo "  [pr] opened for manual resolution." || echo "  [warn] could not open PR."
+  else
+    echo "  [pr] #${existing2} already open."
+  fi
+  return 0
+}
+
+# ══════════════════════════════════════════════════════════════════
+#  COMMANDS
+# ══════════════════════════════════════════════════════════════════
+
+cmd_init() {
+  require_configured
+  banner
+  bf_fetch "$BF_RELEASE_BRANCH"
+  if ! bf_remote_has "$BF_RELEASE_BRANCH"; then
+    echo "Error: release branch origin/${BF_RELEASE_BRANCH} not found. Push it first."
+    exit 1
+  fi
+  local b created=0
+  for b in $(bf_active_branches); do
+    bf_fetch "$b"
+    if bf_remote_has "$b"; then
+      echo "  [ok] ${b} already exists."
+    else
+      echo "  [create] ${b} from origin/${BF_RELEASE_BRANCH}."
+      git branch -f "$b" "origin/${BF_RELEASE_BRANCH}" >/dev/null 2>&1
+      if git push -q -u origin "$b" 2>/dev/null; then created=$((created+1)); else echo "  [warn] could not push ${b}."; fi
+    fi
+  done
+  git checkout -q "$BF_RELEASE_BRANCH" 2>/dev/null || true
+  echo ""
+  echo "Created ${created} branch(es). Next steps:"
+  echo "  1. On GitHub, protect these branches (require PRs): ${BF_RELEASE_BRANCH} $(bf_active_branches | tr '\n' ' ')"
+  echo "  2. (Optional) Install the eager-cascade Action:"
+  echo "       cp ${PLUGIN_ROOT}/templates/branchflow.yml .github/workflows/"
+  echo "  3. Route feature work with: work-issue <n> --bump <level>  (or --target <branch>)"
+}
+
+cmd_status() {
+  require_configured
+  banner
+  local branches; branches="$(bf_active_branches)"
+  bf_fetch "$BF_RELEASE_BRANCH" $branches
+
+  local cur; cur="$(bf_current_version)"
+  echo "Current released version: ${BF_TAG_PREFIX}${cur}  (release branch: ${BF_RELEASE_BRANCH})"
+  echo ""
+  # pending↑/behind↓ are CONTENT counts (changes, ignoring merge commits), so
+  # they agree with what promote/reconcile actually do.
+  echo "Line          pending↑   behind↓   next version"
+  echo "----          --------   -------   ------------"
+  local b lvl ahead behind nextv
+  for b in $branches; do
+    bf_remote_has "$b" || { printf "  %-12s (missing -- run 'branchflow init')\n" "$b"; continue; }
+    ahead="$(bf_content_ahead "origin/${BF_RELEASE_BRANCH}" "origin/${b}")"
+    behind="$(bf_content_ahead "origin/${b}" "origin/${BF_RELEASE_BRANCH}")"
+    lvl="$(bf_level_of "$b")"
+    if [[ -n "$lvl" ]]; then nextv="${BF_TAG_PREFIX}$(bf_bump_version "$cur" "$lvl")"; else nextv="(bump at promote)"; fi
+    printf "  %-12s %6s     %6s    %s\n" "$b" "$ahead" "$behind" "$nextv"
+  done
+
+  echo ""
+  local invariant_ok=true
+  if [[ "$BF_MODE" == "trains" ]]; then
+    echo "Invariant (every lower line contained in higher lines):"
+    local viol; viol="$(bf_invariant_violations)"
+    if [[ -z "$viol" ]]; then
+      echo "  ✓ holds -- all lines are cascaded up. Promotions are safe."
+    else
+      invariant_ok=false
+      echo "  ✗ VIOLATED -- run 'branchflow cascade' before promoting:"
+      local line low high n
+      while IFS= read -r line; do
+        low="${line%%->*}"; high="${line#*->}"; n="${high#*:}"; high="${high%%:*}"
+        echo "      ${low} has ${n} change(s) not in ${high}"
+      done <<<"$viol"
+    fi
+  fi
+  for b in $branches; do
+    bf_remote_has "$b" || continue
+    behind="$(bf_content_ahead "origin/${b}" "origin/${BF_RELEASE_BRANCH}" 2>/dev/null || echo 0)"
+    [[ "$behind" -gt 0 ]] && echo "  ⓘ ${b} is missing ${behind} change(s) from ${BF_RELEASE_BRANCH} -- run 'branchflow reconcile'."
+  done
+
+  # Deterministic exit: --check returns 0 when the invariant holds, 2 when not.
+  if [[ "$FLAG_CHECK" == "true" && "$invariant_ok" != "true" ]]; then
+    return 2
+  fi
+  return 0
+}
+
+cmd_cascade() {
+  require_configured
+  if [[ "$BF_MODE" != "trains" ]]; then
+    echo "cascade is a no-op in single-line mode (nothing to cascade). Use promote/reconcile."
+    exit 0
+  fi
+  banner
+  # Which levels to start from: the given one, or every present level.
+  local start_levels
+  if [[ -n "$CMD_ARG" ]]; then
+    local lvl; lvl="$(bf_level_of "$CMD_ARG")"
+    [[ -z "$lvl" ]] && { echo "Error: '${CMD_ARG}' is not a configured level/branch."; exit 1; }
+    start_levels="$lvl"
+  else
+    start_levels="${BF_LEVELS[*]}"
+  fi
+  # Forward-merge each starting level into the NEXT level up (adjacent-only).
+  # Propagation to higher lines happens as each hop lands: the eager Action
+  # re-triggers on the next accumulator's push; manually, cascade the next
+  # level (or re-run) once the PR merges. 'status'/the promote gate flag any
+  # gap, so this is always safe.
+  local lvl higher lb hb
+  for lvl in $start_levels; do
+    higher="$(bf_next_level "$lvl")"
+    [[ -z "$higher" ]] && continue
+    lb="$(bf_branch_for_level "$lvl")"; hb="$(bf_branch_for_level "$higher")"
+    echo "Cascade ${lb} -> ${hb}:"
+    merge_via_pr "$lb" "$hb" "cascade" "$FLAG_AUTO_MERGE"
+  done
+  echo ""
+  if [[ "$FLAG_AUTO_MERGE" != "true" ]]; then
+    echo "Opened forward-merge PRs (review + merge them, or pass --auto-merge)."
+  fi
+  echo "Re-run 'branchflow status' to confirm the invariant once the PRs land."
+}
+
+cmd_promote() {
+  require_configured
+  [[ -z "$CMD_ARG" ]] && { echo "Error: promote requires a level or bump (major|minor|patch$( [[ "$BF_MODE" == "trains" ]] && echo " or a line name"))."; exit 1; }
+  banner
+
+  # Resolve the line branch + bump level.
+  local level line
+  if [[ "$BF_MODE" == "trains" ]]; then
+    level="$(bf_level_of "$CMD_ARG")"
+    [[ -z "$level" ]] && level="$CMD_ARG"     # allow bare bump names too
+    case "$level" in major|minor|patch) ;; *) echo "Error: '${CMD_ARG}' is not a configured line or bump level."; exit 1 ;; esac
+    line="$(bf_branch_for_level "$level")"
+    [[ -z "$line" ]] && { echo "Error: no branch configured for level '${level}'."; exit 1; }
+  else
+    case "$CMD_ARG" in major|minor|patch) level="$CMD_ARG" ;; *) echo "Error: in single-line mode, promote takes a bump: major|minor|patch."; exit 1 ;; esac
+    line="$BF_SINGLE_TARGET"
+  fi
+
+  bf_fetch "$BF_RELEASE_BRANCH" "$line"
+  bf_remote_has "$line" || { echo "Error: origin/${line} not found (run 'branchflow init')."; exit 1; }
+
+  # Invariant gate (trains mode): the line must contain every lower line.
+  if [[ "$BF_MODE" == "trains" ]]; then
+    bf_fetch $(bf_active_branches)
+    local viol lower lb missing=""
+    for lower in "${BF_LEVELS[@]}"; do
+      [[ "$lower" == "$level" ]] && break
+      lb="$(bf_branch_for_level "$lower")"
+      bf_remote_has "$lb" || continue
+      local n; n="$(bf_content_ahead "origin/${line}" "origin/${lb}")"
+      [[ "$n" -gt 0 ]] && missing+="      ${lb} has ${n} change(s) not in ${line}"$'\n'
+    done
+    if [[ -n "$missing" ]]; then
+      echo "✗ Invariant violated -- ${line} does not contain all lower lines:"
+      printf '%s' "$missing"
+      if [[ "$FLAG_FORCE" != "true" ]]; then
+        echo "Refusing to promote (a release now would DROP the un-cascaded work above)."
+        echo "Run 'branchflow cascade' first, or re-run with --force to override."
+        exit 3
+      fi
+      echo "--force set: proceeding despite the violation."
+      confirm "Really promote ${line} and risk dropping the work above?" || { echo "Aborted."; exit 1; }
+    fi
+  fi
+
+  # Anything to release?
+  local ahead; ahead="$(bf_content_ahead "origin/${BF_RELEASE_BRANCH}" "origin/${line}")"
+  if [[ "$ahead" -eq 0 ]]; then echo "Nothing to promote: ${line} has no changes beyond ${BF_RELEASE_BRANCH}."; exit 0; fi
+
+  # Compute the new version.
+  local cur new; cur="$(bf_current_version)"; new="$(bf_bump_version "$cur" "$level")"
+  echo "Promoting ${line} -> ${BF_RELEASE_BRANCH}:  ${BF_TAG_PREFIX}${cur} -> ${BF_TAG_PREFIX}${new}  (${level})"
+  echo "  ${ahead} commit(s) to release."
+  confirm "Open the release PR?" || { echo "Aborted."; exit 1; }
+
+  # Prepare the release branch and let Claude apply the bump + changelog.
+  local rb="branchflow/release/${new}"
+  git branch -f "$rb" "origin/${line}" >/dev/null 2>&1
+  git checkout -q "$rb"
+  if have_claude; then
+    claude --model "$BRANCHFLOW_MODEL" --effort "$BRANCHFLOW_EFFORT" \
+      "${CHANGELOG_SKILL} ${new} ${level} ${line}"
+  else
+    echo "  [note] claude unavailable; opening a tag-only release PR (no version-file bump / changelog)."
+    [[ "$BF_VERSION_FILE" != "none" ]] && echo "  [warn] release.versionFile is '${BF_VERSION_FILE}' but was not bumped -- do it manually or re-run where claude is installed."
+  fi
+  # Commit anything the changelog stage staged/left (version file, changelog).
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    git add -A
+    git commit -qm "branchflow(release): ${BF_TAG_PREFIX}${new}" 2>/dev/null || true
+  fi
+  git push -q -u origin "$rb" 2>/dev/null || { echo "Error: could not push ${rb}."; git checkout -q "$BF_RELEASE_BRANCH" 2>/dev/null || true; exit 1; }
+
+  local pr_url
+  pr_url="$(gh pr create --base "$BF_RELEASE_BRANCH" --head "$rb" \
+    --title "Release ${BF_TAG_PREFIX}${new} (${level})" \
+    --body "Automated release PR by branchflow: promote \`${line}\` into \`${BF_RELEASE_BRANCH}\` as **${BF_TAG_PREFIX}${new}**.
+
+- Bump: ${level}  (${BF_TAG_PREFIX}${cur} -> ${BF_TAG_PREFIX}${new})
+- ${ahead} commit(s) since the last release.
+
+After this merges, run \`branchflow reconcile\` to tag ${BF_TAG_PREFIX}${new} and merge ${BF_RELEASE_BRANCH} back down into the accumulator lines." 2>/dev/null)" \
+    || { echo "Error: could not open release PR."; git checkout -q "$BF_RELEASE_BRANCH" 2>/dev/null || true; exit 1; }
+  git checkout -q "$BF_RELEASE_BRANCH" 2>/dev/null || true
+  local pr_num="${pr_url##*/}"
+  echo "Release PR: ${pr_url}"
+
+  if [[ "$FLAG_AUTO_MERGE" == "true" ]]; then
+    if gh pr merge "$pr_num" --merge --auto >/dev/null 2>&1; then
+      echo "Auto-merge enabled. Once checks pass and it merges, run 'branchflow reconcile' (or let the Action do it)."
+    else
+      echo "Auto-merge unavailable in this environment; merge the PR manually, then run 'branchflow reconcile'."
+    fi
+  else
+    echo "Review and merge the PR, then run: branchflow reconcile"
+  fi
+}
+
+cmd_reconcile() {
+  require_configured
+  banner
+  bf_fetch "$BF_RELEASE_BRANCH"
+
+  # 1. Tag a just-merged release, if any and not already tagged.
+  local new="$OPT_VERSION"
+  if [[ -z "$new" ]]; then
+    local head; head="$(bf_last_merged_release_head)"
+    [[ -n "$head" ]] && new="$(bf_version_from_release_head "$head")"
+  fi
+  if [[ -n "$new" ]]; then
+    local tag="${BF_TAG_PREFIX}${new}"
+    if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null 2>&1; then
+      echo "  [ok] ${tag} already tagged."
+    else
+      git tag "$tag" "origin/${BF_RELEASE_BRANCH}" 2>/dev/null \
+        && git push -q origin "refs/tags/${tag}" 2>/dev/null \
+        && echo "  [tag] ${tag} -> origin/${BF_RELEASE_BRANCH}" \
+        || echo "  [warn] could not create/push tag ${tag}."
+    fi
+  else
+    echo "  [note] no merged release detected; skipping tagging (pass --version to force)."
+  fi
+
+  # 2. Merge the release branch DOWN into every accumulator (via PRs).
+  echo ""
+  echo "Reconciling ${BF_RELEASE_BRANCH} down into accumulator lines:"
+  local b
+  for b in $(bf_active_branches); do
+    echo "Reconcile ${BF_RELEASE_BRANCH} -> ${b}:"
+    merge_via_pr "$BF_RELEASE_BRANCH" "$b" "reconcile" "$FLAG_AUTO_MERGE"
+  done
+  echo ""
+  if [[ "$FLAG_AUTO_MERGE" != "true" ]]; then
+    echo "Opened reconcile PRs (review + merge them, or pass --auto-merge)."
+  fi
+  echo "Reconcile pass complete."
+}
+
+# ── Dispatch ──────────────────────────────────────────────────────
+case "$COMMAND" in
+  init)      cmd_init ;;
+  status)    cmd_status ;;
+  cascade)   cmd_cascade ;;
+  promote)   cmd_promote ;;
+  reconcile) cmd_reconcile ;;
+  *)         usage 1 ;;
+esac

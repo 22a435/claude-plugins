@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Is
 
-A Claude Code plugin marketplace (`22a435-workflows`) containing three plugins that orchestrate autonomous multi-stage workflows by launching sequential Claude Code CLI sessions. Each stage gets a fresh context window with full subagent access.
+A Claude Code plugin marketplace (`22a435-workflows`) containing four plugins. Three orchestrate autonomous multi-stage workflows by launching sequential Claude Code CLI sessions (each stage gets a fresh context window with full subagent access); the fourth, `branchflow`, is a release-train CLI that maintains and releases the branches the others target.
 
 **Why sequential sessions:** Claude Code subagents cannot spawn sub-subagents. Running each stage as its own top-level `claude` invocation gives every skill maximum parallelism.
 
@@ -38,10 +38,20 @@ Backlog consolidation -- the net *consumer* of issues, counterweight to the two 
 - Stages: `setup -> inventory -> reconcile -> cluster -> interview -> consolidate -> verify -> integrate -> done`
 - Approval gate: `interview` presents the full plan; no GitHub issue is closed or created until it is approved. GitHub mutations happen only in `consolidate` (and `verify` salvage).
 
+### branchflow
+Release-train orchestrator -- the counterpart to the feature plugins: they *route* PRs into branches, branchflow *maintains and releases* those branches. Manages semver update branches (`major`/`minor`/`patch` accumulators) or a single `develop` line: cascades lower lines up into higher ones (keeping `major ⊇ minor ⊇ patch`) and cuts version-bump release PRs into `main`. **Merge-only and PR-driven** -- never force-pushes, so it coexists with strict branch protection. Not a stage state machine; a subcommand CLI. `claude` is a *soft* dependency (only conflict-resolution + changelog use it), so it runs in CI.
+
+- CLI: `branchflow <init|status|cascade|promote|reconcile> [--auto-merge] [--force] [--yes] [--version <v>] [--repo-dir <path>]`
+- Commands: `init` (create accumulators), `status [--check]` (pending/invariant/versions), `cascade [<level>]` (forward-merge up), `promote <level|bump>` (version-bump release PR; refuses on a violated invariant unless `--force`), `reconcile` (tag a merged release + merge main down into all lines)
+- Config: reads the shared `.claude-workflows.json` plus an optional `release` block (`versionFrom`/`versionFile`/`tagPrefix`/`changelogFile`); tag-based versioning by default
+- Skills: `resolve-merge` (integrate conflicting release lines) and `changelog` (apply the bump + draft notes for the release PR)
+- Invariant: `promote` gates on `major ⊇ minor ⊇ patch`; the version is bumped only in the release PR, never in accumulators/feature branches; merges must be merge-commits (never squash) or the cascade breaks
+- Optional eager mode: `templates/branchflow.yml` GitHub Action cascades on accumulator pushes and reconciles on main pushes
+
 ## Repository Structure
 
 ```
-.claude-plugin/marketplace.json   # Marketplace manifest listing all three plugins
+.claude-plugin/marketplace.json   # Marketplace manifest listing all four plugins
 issue-workflow/
   .claude-plugin/plugin.json      # Plugin metadata + version
   bin/work-issue                  # Bash orchestrator (state machine)
@@ -63,6 +73,15 @@ triage/
   hooks/hooks.json
   hooks/check-git-branch.sh
   skills/<stage>/SKILL.md         # inventory/reconcile/cluster/interview/consolidate/verify/integrate
+branchflow/
+  .claude-plugin/plugin.json
+  bin/branchflow                  # Subcommand CLI (init/status/cascade/promote/reconcile)
+  bin/_branchflow-lib.sh          # Release-train primitives (config, version, invariant, merge)
+  hooks/hooks.json
+  hooks/check-git-branch.sh       # byte-identical copy
+  skills/resolve-merge/SKILL.md   # conflict resolution for cascade/reconcile
+  skills/changelog/SKILL.md       # version bump + changelog for the release PR
+  templates/branchflow.yml        # optional eager-cascade GitHub Action
 ```
 
 A per-repo `.claude-workflows.json` (read from the target repo root, not this repo) configures the base/target branch, update-branch map, feature-branch prefix, and protected branches -- see Branching under Architecture.
@@ -97,7 +116,7 @@ Skill conventions:
 
 ### Hooks
 
-All three plugins share the same hook: a `PreToolUse` hook on `Bash` that blocks `git push` to protected branches. The list defaults to `main master production` but is overridden by `protectedBranches` in the target repo's `.claude-workflows.json` (see Branching below) -- repos using develop/staging or update branches should list those so feature sessions can never push directly to a merge target.
+All four plugins share the same hook: a `PreToolUse` hook on `Bash` that blocks `git push` to protected branches. The list defaults to `main master production` but is overridden by `protectedBranches` in the target repo's `.claude-workflows.json` (see Branching below) -- repos using develop/staging or update branches should list those so feature sessions can never push directly to a merge target.
 
 ### Branching (configurable base/target)
 
@@ -120,7 +139,7 @@ By default every plugin cuts a feature branch from `origin/main` and opens its P
 - **Precedence:** `--onto` (stacking) > `--target` > `<PLUGIN>_TARGET_BRANCH` env > `--bump`/`semver:*` label > config `targetBranch` > `main`.
 - **Bump routing and stacking are issue-workflow only** (the plugin that produces sized feature work). `deep-review` and `triage` take a single configured target (`--target` / `<PLUGIN>_TARGET_BRANCH` / config), no `--bump` or `--onto`.
 - **Stacking (`--onto <branch|PR#>`):** cut from and target a parent feature branch so dependent PRs stack and merge into the update branch once the whole feature lands. When the parent PR merges, GitHub retargets the child onto the final target; the integrate/review skills and the orchestrator's inline trivial-integration path detect the merged parent and follow it.
-- **Out of scope:** promoting an update branch into `main` with a version bump (the workflows only route feature PRs to the right update branch).
+- **Promotion to `main`** (cascade lower lines up, version-bump an update branch into `main`, tag, reconcile down) is handled by the **branchflow** plugin -- see its section above. The feature plugins only *route* PRs to the right line.
 - **Backwards compatible:** with no config and no new flags, behavior is byte-for-byte the trunk-based "branch from origin/main, PR to main" model.
 
 ### Stage Transition Signals
@@ -153,7 +172,7 @@ When modifying the bash orchestrators:
 
 ## Versioning
 
-Both plugins follow [Semantic Versioning](https://semver.org/). When making changes to either plugin:
+All plugins follow [Semantic Versioning](https://semver.org/). When making changes to a plugin:
 
 - **Always bump the patch version** in that plugin's `.claude-plugin/plugin.json`
 - If the change alters the stage machine topology, public interfaces, or orchestrator behavior, it may warrant a minor or major bump -- ask the user if the level of change is unclear

@@ -16,6 +16,11 @@
       "name": "triage",
       "source": "./triage",
       "description": "Issue triage workflow: consolidates open issues and in-code TODOs into a small set of well-scoped, dependency-aware issues ready for the issue workflow"
+    },
+    {
+      "name": "branchflow",
+      "source": "./branchflow",
+      "description": "Release-train orchestrator: cascades semver update branches (major/minor/patch) or a single develop line and cuts version-bump release PRs into main. Merge-only, PR-driven, invariant-guarded"
     }
   ]
 }
