@@ -25,7 +25,7 @@ BF_LEVEL_ORDER=(patch minor major)
 #       BF_BRANCH_<level> (branch name per present level)
 #       BF_HAS_UPDATE_BRANCHES ("true"/"false")
 #       BF_SINGLE_TARGET (targetBranch, for the develop model; "" otherwise)
-#       BF_MODE ("trains" = updateBranches | "single" = targetBranch | "none")
+#       BF_MODE ("semver" = updateBranches | "develop" = targetBranch | "none")
 bf_load_config() {
   local cfg="${REPO_ROOT}/.claude-workflows.json"
   BF_CONFIG_FILE="$cfg"
@@ -61,9 +61,9 @@ bf_load_config() {
   fi
 
   if [[ "$BF_HAS_UPDATE_BRANCHES" == "true" ]]; then
-    BF_MODE="trains"
+    BF_MODE="semver"
   elif [[ -n "$BF_SINGLE_TARGET" ]]; then
-    BF_MODE="single"
+    BF_MODE="develop"
   fi
 }
 

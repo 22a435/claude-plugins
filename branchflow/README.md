@@ -7,12 +7,12 @@ force-pushes and coexists with strict branch protection.
 
 It handles two shapes, chosen entirely by your `.claude-workflows.json`:
 
-- **Single line** — one `develop`/staging branch; the version bump is decided at
+- **develop mode** — one `develop`/staging branch; the version bump is decided at
   release time. No cascade. The simplest thing that keeps `main` releasable.
-- **Semver trains** — separate `major` / `minor` / `patch` accumulator branches, so
+- **semver mode** — separate `major` / `minor` / `patch` accumulator branches, so
   you can ship the smallest coherent release on demand without dragging in half-done
   larger work. This is the powerful (and more involved) mode; the rest of this README
-  focuses on it, and calls out where single-line differs.
+  focuses on it, and calls out where develop mode differs.
 
 ## The model
 
@@ -81,8 +81,8 @@ optional `release` block. All keys optional.
 | Key | Meaning | Default |
 |-----|---------|---------|
 | `releaseBranch` | Released / tagged line | `main` |
-| `targetBranch` | Single develop/staging line (single-line mode) | — |
-| `updateBranches` | `{major,minor,patch}` accumulator branch names (trains mode) | — |
+| `targetBranch` | Single develop/staging line (develop mode) | — |
+| `updateBranches` | `{major,minor,patch}` accumulator branch names (semver mode) | — |
 | `protectedBranches` | Branches the push-guard hook blocks | `main master production` |
 | `release.versionFrom` | `tag` or a version file | `tag` |
 | `release.versionFile` | File `promote` bumps (`package.json`, …); `none` = tag-only | `none` |
@@ -110,7 +110,7 @@ branchflow promote minor        # cut a minor-bump release PR: develop -> main
 branchflow reconcile            # after it merges: tag + merge main back into develop
 ```
 
-### Example B — three semver trains, canonical package.json version
+### Example B — three semver lines, canonical package.json version
 
 Ship a patch without pulling in in-flight minor/major work.
 
@@ -138,12 +138,12 @@ For repos that don't keep a canonical version file (versioned purely by git tags
 {
   "releaseBranch": "release",
   "updateBranches": {
-    "major": "trains/major",
-    "minor": "trains/minor",
-    "patch": "trains/patch"
+    "major": "release/major",
+    "minor": "release/minor",
+    "patch": "release/patch"
   },
   "defaultBump": "patch",
-  "protectedBranches": ["release", "trains/major", "trains/minor", "trains/patch"],
+  "protectedBranches": ["release", "release/major", "release/minor", "release/patch"],
   "release": { "versionFrom": "tag", "versionFile": "none", "tagPrefix": "v" }
 }
 ```
@@ -160,7 +160,7 @@ For repos that don't keep a canonical version file (versioned purely by git tags
 
 Global flags: `--yes` (skip confirmations), `--auto-merge`, `--force`, `--repo-dir <path>`.
 
-## End-to-end walkthroughs (trains mode)
+## End-to-end walkthroughs (semver mode)
 
 ### One-time setup
 

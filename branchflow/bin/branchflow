@@ -84,8 +84,8 @@ Global options:
 
 Configuration (.claude-workflows.json at the target repo root):
   releaseBranch                Released/tagged line (default "main")
-  targetBranch                 Single develop/staging line (single-line mode)
-  updateBranches {major,minor,patch}   Accumulator branch names (trains mode)
+  targetBranch                 Single develop/staging line (develop mode)
+  updateBranches {major,minor,patch}   Accumulator branch names (semver mode)
   protectedBranches [ ... ]    Branches the push-guard hook blocks
   release.versionFrom          "tag" (default) or a version file
   release.versionFile          File promote bumps (e.g. package.json); "none"
@@ -217,11 +217,11 @@ require_configured() {
   fi
 }
 
-# All accumulator branches for the active mode, low->high (single -> one).
+# All accumulator branches for the active mode, low->high (develop -> one).
 bf_active_branches() {
-  if [[ "$BF_MODE" == "trains" ]]; then
+  if [[ "$BF_MODE" == "semver" ]]; then
     local lvl; for lvl in "${BF_LEVELS[@]}"; do bf_branch_for_level "$lvl"; done
-  elif [[ "$BF_MODE" == "single" ]]; then
+  elif [[ "$BF_MODE" == "develop" ]]; then
     echo "$BF_SINGLE_TARGET"
   fi
 }
@@ -328,14 +328,14 @@ cmd_init() {
     det_release="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || git symbolic-ref --short HEAD 2>/dev/null || echo main)"
     det_vfile="$(bf_detect_version_file)"
 
-    ask model    "Branching model -- 'trains' (major/minor/patch) or 'single' (one develop line)" "trains"
+    ask model    "Branching model -- 'semver' (major/minor/patch lines) or 'develop' (one line)" "semver"
     ask release  "Release branch (holds tagged releases)" "$det_release"
     ask tagpfx   "Tag prefix" "v"
     ask vfile    "Version file to bump on release (or 'none' for tag-only)" "$det_vfile"
     ask changelog "Changelog file to maintain (or 'none')" "none"
 
     local mkey_json prot_json
-    if [[ "$model" == "single" ]]; then
+    if [[ "$model" == "develop" ]]; then
       local dev; ask dev "Develop/staging branch name" "develop"
       mkey_json="$(jq -n --arg d "$dev" '{targetBranch:$d}')"
       prot_json="$(jq -n --arg r "$release" --arg d "$dev" '[$r,$d]')"
@@ -485,7 +485,7 @@ cmd_status() {
 
   echo ""
   local invariant_ok=true
-  if [[ "$BF_MODE" == "trains" ]]; then
+  if [[ "$BF_MODE" == "semver" ]]; then
     echo "Invariant (every lower line contained in higher lines):"
     local viol; viol="$(bf_invariant_violations)"
     if [[ -z "$viol" ]]; then
@@ -515,8 +515,8 @@ cmd_status() {
 
 cmd_cascade() {
   require_configured
-  if [[ "$BF_MODE" != "trains" ]]; then
-    echo "cascade is a no-op in single-line mode (nothing to cascade). Use promote/reconcile."
+  if [[ "$BF_MODE" != "semver" ]]; then
+    echo "cascade is a no-op in develop mode (nothing to cascade). Use promote/reconcile."
     exit 0
   fi
   banner
@@ -551,27 +551,27 @@ cmd_cascade() {
 
 cmd_promote() {
   require_configured
-  [[ -z "$CMD_ARG" ]] && { echo "Error: promote requires a level or bump (major|minor|patch$( [[ "$BF_MODE" == "trains" ]] && echo " or a line name"))."; exit 1; }
+  [[ -z "$CMD_ARG" ]] && { echo "Error: promote requires a level or bump (major|minor|patch$( [[ "$BF_MODE" == "semver" ]] && echo " or a line name"))."; exit 1; }
   banner
 
   # Resolve the line branch + bump level.
   local level line
-  if [[ "$BF_MODE" == "trains" ]]; then
+  if [[ "$BF_MODE" == "semver" ]]; then
     level="$(bf_level_of "$CMD_ARG")"
     [[ -z "$level" ]] && level="$CMD_ARG"     # allow bare bump names too
     case "$level" in major|minor|patch) ;; *) echo "Error: '${CMD_ARG}' is not a configured line or bump level."; exit 1 ;; esac
     line="$(bf_branch_for_level "$level")"
     [[ -z "$line" ]] && { echo "Error: no branch configured for level '${level}'."; exit 1; }
   else
-    case "$CMD_ARG" in major|minor|patch) level="$CMD_ARG" ;; *) echo "Error: in single-line mode, promote takes a bump: major|minor|patch."; exit 1 ;; esac
+    case "$CMD_ARG" in major|minor|patch) level="$CMD_ARG" ;; *) echo "Error: in develop mode, promote takes a bump: major|minor|patch."; exit 1 ;; esac
     line="$BF_SINGLE_TARGET"
   fi
 
   bf_fetch "$BF_RELEASE_BRANCH" "$line"
   bf_remote_has "$line" || { echo "Error: origin/${line} not found (run 'branchflow init')."; exit 1; }
 
-  # Invariant gate (trains mode): the line must contain every lower line.
-  if [[ "$BF_MODE" == "trains" ]]; then
+  # Invariant gate (semver mode): the line must contain every lower line.
+  if [[ "$BF_MODE" == "semver" ]]; then
     bf_fetch $(bf_active_branches)
     local viol lower lb missing=""
     for lower in "${BF_LEVELS[@]}"; do
