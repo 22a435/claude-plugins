@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Is
 
-A Claude Code plugin marketplace (`22a435-workflows`) containing three plugins that orchestrate autonomous multi-stage workflows by launching sequential Claude Code CLI sessions. Each stage gets a fresh context window with full subagent access.
+A Claude Code plugin marketplace (`22a435-workflows`) containing four plugins. Three orchestrate autonomous multi-stage workflows by launching sequential Claude Code CLI sessions (each stage gets a fresh context window with full subagent access); the fourth, `branchflow`, is a release-train CLI that maintains and releases the branches the others target.
 
 **Why sequential sessions:** Claude Code subagents cannot spawn sub-subagents. Running each stage as its own top-level `claude` invocation gives every skill maximum parallelism.
 
@@ -13,17 +13,18 @@ A Claude Code plugin marketplace (`22a435-workflows`) containing three plugins t
 ### issue-workflow
 Autonomous issue-to-PR pipeline. Given a GitHub issue number, produces a reviewed, tested, integration-ready PR across 8 stages.
 
-- CLI: `work-issue <issue-number> [--effort high|max] [--model <model>] [--resume <stage>]`
-- Branch: `claude/<issue-number>`
+- CLI: `work-issue <issue-number> [--effort high|max] [--model <model>] [--resume <stage>] [--target <branch>] [--bump major|minor|patch] [--onto <branch|PR#>]`
+- Branch: `<branchPrefix>/<issue-number>` (default `claude/<issue-number>`)
 - Work dir: `./claude-work/<issue-number>/`
+- Target/base branch is configurable (see Branching below); `--bump`/`--onto` route to semver update branches / stack onto an open PR
 - Stages: `setup -> research <-> interview <-> plan -> execute <-> debug <-> verify <-> review <-> integrate -> done`
 - Hard wall: once execution starts, no returning to pre-execution stages
 
 ### deep-review
 Comprehensive codebase review with up to 10 parallel sub-reviewers and automated remediation.
 
-- CLI: `deep-review [--effort high|max] [--model <model>] [--resume <stage>] [--session <N>]`
-- Branch: `claude/review/<session-number>`
+- CLI: `deep-review [--effort high|max] [--model <model>] [--resume <stage>] [--session <N>] [--target <branch>]`
+- Branch: `<branchPrefix>/review/<session-number>` (default `claude/review/<session-number>`)
 - Work dir: `./claude-reviews/<session-number>/`
 - Stages: `setup -> context-building -> interview <-> update-tooling -> [plan-sc-audit -> run-sc-audit] -> plan -> review -> remediation-plan -> remediation -> verify -> integrate -> done`
 - Conditional stages: `plan-sc-audit` and `run-sc-audit` only run for Solidity projects with sc-auditor approved during interview
@@ -31,35 +32,60 @@ Comprehensive codebase review with up to 10 parallel sub-reviewers and automated
 ### triage
 Backlog consolidation -- the net *consumer* of issues, counterweight to the two net producers above. Reads the open issue set (full comment threads) plus in-code TODOs, closes already-fixed/duplicate issues, and consolidates the rest into a small, loosely-coupled set of well-scoped issues -- each a single-PR "bite" for issue-workflow, with dependent work bundled behind the design decision it hinges on.
 
-- CLI: `triage [--effort high|xhigh|max] [--model <model>] [--resume <stage>] [--session <N>]`
-- Branch: `claude/triage/<session-number>`
+- CLI: `triage [--effort high|xhigh|max] [--model <model>] [--resume <stage>] [--session <N>] [--target <branch>]`
+- Branch: `<branchPrefix>/triage/<session-number>` (default `claude/triage/<session-number>`)
 - Work dir: `./claude-triages/<session-number>/`
 - Stages: `setup -> inventory -> reconcile -> cluster -> interview -> consolidate -> verify -> integrate -> done`
 - Approval gate: `interview` presents the full plan; no GitHub issue is closed or created until it is approved. GitHub mutations happen only in `consolidate` (and `verify` salvage).
 
+### branchflow
+Release-train orchestrator -- the counterpart to the feature plugins: they *route* PRs into branches, branchflow *maintains and releases* those branches. Manages semver update branches (`major`/`minor`/`patch` accumulators) or a single `develop` line: cascades lower lines up into higher ones (keeping `major ⊇ minor ⊇ patch`) and cuts version-bump release PRs into `main`. **Merge-only and PR-driven** -- never force-pushes, so it coexists with strict branch protection. Not a stage state machine; a subcommand CLI. `claude` is a *soft* dependency (only conflict-resolution + changelog use it), so it runs in CI.
+
+- CLI: `branchflow <init|status|cascade|promote|reconcile> [--auto-merge] [--force] [--yes] [--version <v>] [--repo-dir <path>]`
+- Commands: `init` (interactive turnkey setup: scaffold config, create accumulators, baseline tag, and set merge-commit-only + branch protection via `gh api`; `--yes` accepts all defaults; idempotent), `status [--check]` (pending/invariant/versions), `cascade [<level>]` (forward-merge up), `promote <level|bump>` (version-bump release PR; refuses on a violated invariant unless `--force`), `reconcile` (tag a merged release + merge main down into all lines)
+- Config: reads the shared `.claude-workflows.json` plus an optional `release` block (`versionFrom`/`versionFile`/`tagPrefix`/`changelogFile`); tag-based versioning by default. Two modes: `semver` (major/minor/patch accumulators) and `develop` (one line)
+- Monorepos: `semver` mode is single-version by nature, so monorepos use `develop` mode + **delegated versioning** -- `release.command` (run by `promote`, e.g. `npx changeset version`) and `release.tagCommand` (run by `reconcile`) hand per-package bumps/tags/changelogs to a dedicated tool. `init` auto-detects a monorepo and pre-fills these. Parallel maintenance lines (patch 1.x while 2.0 develops) are out of scope
+- Skills: `resolve-merge` (integrate conflicting release lines) and `changelog` (apply the bump + draft notes for the release PR)
+- Invariant: `promote` gates on `major ⊇ minor ⊇ patch`; the version is bumped only in the release PR, never in accumulators/feature branches; merges must be merge-commits (never squash) or the cascade breaks
+- Optional eager mode: `templates/branchflow.yml` GitHub Action cascades on accumulator pushes and reconciles on main pushes
+
 ## Repository Structure
 
 ```
-.claude-plugin/marketplace.json   # Marketplace manifest listing all three plugins
+.claude-plugin/marketplace.json   # Marketplace manifest listing all four plugins
 issue-workflow/
   .claude-plugin/plugin.json      # Plugin metadata + version
   bin/work-issue                  # Bash orchestrator (state machine)
+  bin/_branch-lib.sh              # Base/target branch resolver (triplicated, byte-identical)
   hooks/hooks.json                # PreToolUse hook config
-  hooks/check-git-branch.sh       # Prevents push to protected branches
+  hooks/check-git-branch.sh       # Prevents push to protected branches (config-aware)
   skills/<stage>/SKILL.md         # One skill prompt per stage
 deep-review/
   .claude-plugin/plugin.json
   bin/deep-review                 # Bash orchestrator (state machine)
+  bin/_branch-lib.sh              # Base/target branch resolver (byte-identical copy)
   hooks/hooks.json
   hooks/check-git-branch.sh
   skills/<stage>/SKILL.md         # Includes plan-sc-audit/ and run-sc-audit/ for sc-auditor integration
 triage/
   .claude-plugin/plugin.json
   bin/triage                      # Bash orchestrator (state machine)
+  bin/_branch-lib.sh              # Base/target branch resolver (byte-identical copy)
   hooks/hooks.json
   hooks/check-git-branch.sh
   skills/<stage>/SKILL.md         # inventory/reconcile/cluster/interview/consolidate/verify/integrate
+branchflow/
+  .claude-plugin/plugin.json
+  bin/branchflow                  # Subcommand CLI (init/status/cascade/promote/reconcile)
+  bin/_branchflow-lib.sh          # Release-train primitives (config, version, invariant, merge)
+  hooks/hooks.json
+  hooks/check-git-branch.sh       # byte-identical copy
+  skills/resolve-merge/SKILL.md   # conflict resolution for cascade/reconcile
+  skills/changelog/SKILL.md       # version bump + changelog for the release PR
+  templates/branchflow.yml        # optional eager-cascade GitHub Action
 ```
+
+A per-repo `.claude-workflows.json` (read from the target repo root, not this repo) configures the base/target branch, update-branch map, feature-branch prefix, and protected branches -- see Branching under Architecture.
 
 ## Architecture
 
@@ -75,7 +101,7 @@ Pure bash state machines. They:
 
 Key orchestrator patterns:
 - **`refresh_env()`** -- re-sources PATH from a login shell after stages that install tools
-- **Trivial integration** -- if main hasn't diverged, the integrate stage skips Claude entirely and handles it inline in bash
+- **Trivial integration** -- if the configured target branch hasn't diverged, the integrate stage skips Claude entirely and handles it inline in bash
 - **Debug origin tracking** -- `issue-workflow` saves which stage triggered debug in `.debug-origin` so debug can return to the correct stage
 - **Local CI pre-ready gate** -- `issue-workflow` and `deep-review` check a committed `.local-ci-state` marker (local CI command + tree-content hash excluding the work dir, written by the verify skill) before `gh pr ready`; stale state re-runs local CI inline or re-enters verify, and the PR stays draft if local CI cannot go green
 
@@ -91,7 +117,31 @@ Skill conventions:
 
 ### Hooks
 
-Both plugins share the same hook: a `PreToolUse` hook on `Bash` that blocks `git push` to protected branches (main, master, production).
+All four plugins share the same hook: a `PreToolUse` hook on `Bash` that blocks `git push` to protected branches. The list defaults to `main master production` but is overridden by `protectedBranches` in the target repo's `.claude-workflows.json` (see Branching below) -- repos using develop/staging or update branches should list those so feature sessions can never push directly to a merge target.
+
+### Branching (configurable base/target)
+
+By default every plugin cuts a feature branch from `origin/main` and opens its PR against `main`. A per-repo `.claude-workflows.json` at the **target repo root** (read via `jq`; all keys optional) changes this without touching the plugins:
+
+```jsonc
+{
+  "targetBranch": "develop",              // default PR base (omitted => "main")
+  "branchPrefix": "claude",               // feature-branch namespace (omitted => "claude")
+  "defaultBump": "patch",                 // used only with updateBranches
+  "updateBranches": { "major": "release/major", "minor": "release/minor", "patch": "release/patch" },
+  "protectedBranches": ["main", "release/major", "release/minor", "release/patch"]
+}
+```
+
+(Comments above are illustrative; the actual file must be strict JSON -- `jq` rejects `//` comments, and a malformed config is silently ignored, falling back to `main`.)
+
+- **Resolution lives in `bin/_branch-lib.sh`** -- a byte-identical copy in each plugin's `bin/` (no shared lib ships across independently-installed plugins; keep the three copies in sync, same as the three `check-git-branch.sh`). `resolve_branches()` exports the resolved values; `write_branch_meta`/`load_branch_meta` persist them to `<work-dir>/.branch-meta.json` for `--resume`.
+- **Exported vars the skills read:** `WF_TARGET` (PR base), `WF_BASE_REF` (`origin/$WF_TARGET`; fetch/diff/rebase against this), `WF_BRANCH_PREFIX`, and for stacking `WF_STACK_PARENT_PR` / `WF_STACK_FINAL_TARGET`. Skills resolve these once (env var > `.branch-meta.json` > `origin/main`) and then never re-type `origin/main`.
+- **Precedence:** `--onto` (stacking) > `--target` > `<PLUGIN>_TARGET_BRANCH` env > `--bump`/`semver:*` label > config `targetBranch` > `main`.
+- **Bump routing and stacking are issue-workflow only** (the plugin that produces sized feature work). `deep-review` and `triage` take a single configured target (`--target` / `<PLUGIN>_TARGET_BRANCH` / config), no `--bump` or `--onto`.
+- **Stacking (`--onto <branch|PR#>`):** cut from and target a parent feature branch so dependent PRs stack and merge into the update branch once the whole feature lands. When the parent PR merges, GitHub retargets the child onto the final target; the integrate/review skills and the orchestrator's inline trivial-integration path detect the merged parent and follow it.
+- **Promotion to `main`** (cascade lower lines up, version-bump an update branch into `main`, tag, reconcile down) is handled by the **branchflow** plugin -- see its section above. The feature plugins only *route* PRs to the right line.
+- **Backwards compatible:** with no config and no new flags, behavior is byte-for-byte the trunk-based "branch from origin/main, PR to main" model.
 
 ### Stage Transition Signals
 
@@ -104,6 +154,7 @@ When editing SKILL.md files:
 - The YAML frontmatter (`name`, `description`, `disable-model-invocation`, `allowed-tools`) is parsed by Claude Code's plugin system
 - `disable-model-invocation: true` means the skill cannot be auto-triggered -- it must be explicitly invoked
 - Keep the "Workflow Context" section consistent across skills within a plugin (document ownership rules, commit format, subagent boundaries)
+- **Never hardcode `origin/main`, `--base main`, or the `claude/` branch prefix.** Branch-touching skills resolve the target once in a "Step 0" (env `WF_TARGET`/`WF_BASE_REF` > `.branch-meta.json` > `origin/main`) and use those vars; `gh pr` calls target the current branch (`gh pr comment` with no arg, `--head "$(git branch --show-current)"`, `git push ... origin HEAD`) so a custom `branchPrefix` still works
 
 ## Editing Orchestrators
 
@@ -112,6 +163,7 @@ When modifying the bash orchestrators:
 - The `ALL_STAGES` array is used for `--resume` validation
 - `STAGE_SKILL`, `STAGE_DOC`, `STAGE_MODEL`, `STAGE_EFFORT` maps must all cover the same set of stages
 - Environment variable overrides follow the pattern `<PLUGIN>_MODEL_<STAGE>` (with hyphens converted to underscores for env var names)
+- Base/target branch handling goes through `resolve_branches` (sourced from `bin/_branch-lib.sh`): source it after `cd "$REPO_ROOT"`, set `WF_TARGET_OVERRIDE`/`WF_PREFIX_OVERRIDE` from the plugin's env vars first, then `write_branch_meta` at setup and `load_branch_meta` on `--resume`. Use `$WF_TARGET`/`$WF_BASE_REF` instead of literal `main`/`origin/main`
 
 ## Prerequisites
 
@@ -121,7 +173,7 @@ When modifying the bash orchestrators:
 
 ## Versioning
 
-Both plugins follow [Semantic Versioning](https://semver.org/). When making changes to either plugin:
+All plugins follow [Semantic Versioning](https://semver.org/). When making changes to a plugin:
 
 - **Always bump the patch version** in that plugin's `.claude-plugin/plugin.json`
 - If the change alters the stage machine topology, public interfaces, or orchestrator behavior, it may warrant a minor or major bump -- ask the user if the level of change is unclear

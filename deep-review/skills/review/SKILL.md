@@ -246,7 +246,7 @@ git push
 Post the Executive Summary to the PR thread:
 
 ```bash
-gh pr comment "claude/review/$0" --body "**Deep Review Complete**
+gh pr comment --body "**Deep Review Complete**
 
 <executive summary>
 

@@ -269,7 +269,7 @@ git push
 
 Post summary to PR:
 ```bash
-gh pr comment "claude/review/$0" --body "**SC-Audit Plan:** Configured sc-auditor in <mode> mode. Target: <dir> (<N> contracts). Tools: <enabled tools list>. See ScAuditPlan.md for details."
+gh pr comment --body "**SC-Audit Plan:** Configured sc-auditor in <mode> mode. Target: <dir> (<N> contracts). Tools: <enabled tools list>. See ScAuditPlan.md for details."
 ```
 
 ## Stage Transition Signal

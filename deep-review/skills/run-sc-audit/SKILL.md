@@ -178,7 +178,7 @@ git push
 
 Post summary to PR:
 ```bash
-gh pr comment "claude/review/$0" --body "**SC-Audit Complete**
+gh pr comment --body "**SC-Audit Complete**
 
 <executive summary>
 

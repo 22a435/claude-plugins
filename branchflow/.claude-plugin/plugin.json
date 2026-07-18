@@ -1,0 +1,8 @@
+{
+  "name": "branchflow",
+  "version": "0.3.0",
+  "description": "Release-train orchestrator: manages semver update branches (major/minor/patch) or a single develop line -- cascades lower lines up into higher ones, and cuts version-bump release PRs into the release branch. Merge-only and PR-driven; coexists with strict branch protection.",
+  "author": { "name": "22a435" },
+  "repository": "https://github.com/22a435/claude-plugins",
+  "license": "MIT"
+}

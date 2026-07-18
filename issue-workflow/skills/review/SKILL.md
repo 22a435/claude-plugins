@@ -33,21 +33,39 @@ This skill is one stage of an 8-stage issue-to-PR workflow orchestrated by the `
 
 ### Step 1: Gather Review Context
 
-**Diff against `origin/main` (the canonical upstream), never local `main`.** The orchestrator does not keep local `main` current, so it is almost always stale -- diffing against it folds other people's upstream commits into the review and misrepresents what this branch actually changed. Fetch first:
+**Diff against the configured target branch's remote ref (`$BASE_REF`), never a local branch.** The orchestrator does not keep local branches current, so diffing against a local branch folds other people's upstream commits into the review and misrepresents what this branch actually changed. When this run is **stacked** on a parent feature branch, `$BASE_REF` is that parent -- so the diff shows only the new work, not the parent's commits. Resolve the base once, then fetch:
 
 ```bash
-git fetch origin main
+# Precedence: env vars (set by the orchestrator) > .branch-meta.json > origin/main.
+META="./claude-work/$0/.branch-meta.json"
+TARGET="${WF_TARGET:-$(jq -r '.wfTarget   // empty' "$META" 2>/dev/null)}"
+BASE_REF="${WF_BASE_REF:-$(jq -r '.wfBaseRef // empty' "$META" 2>/dev/null)}"
+TARGET="${TARGET:-main}"; BASE_REF="${BASE_REF:-origin/$TARGET}"
+
+# Stacked on a parent whose PR has merged? GitHub retargets this PR onto the
+# final target -- diff against that so the parent's landed commits aren't
+# re-surfaced as this branch's work.
+STACK_PARENT_PR="${WF_STACK_PARENT_PR:-$(jq -r '.stackParentPR    // empty' "$META" 2>/dev/null)}"
+STACK_FINAL_TARGET="${WF_STACK_FINAL_TARGET:-$(jq -r '.stackFinalTarget // empty' "$META" 2>/dev/null)}"
+if [ -n "$STACK_PARENT_PR" ] && [ -n "$STACK_FINAL_TARGET" ] \
+   && [ "$(gh pr view "$STACK_PARENT_PR" --json state -q .state 2>/dev/null)" = "MERGED" ]; then
+  TARGET="$STACK_FINAL_TARGET"; BASE_REF="origin/$TARGET"
+fi
+git fetch origin "$TARGET"
+echo "Reviewing this branch's delta against: $BASE_REF"
 ```
 
-1. Get the full diff of all changes on this branch:
+1. Get the full diff of all changes on this branch (three-dot: merge-base diff, so a moving base does not fold in unrelated commits):
    ```bash
-   git diff origin/main...HEAD
+   git diff "$BASE_REF...HEAD"
    ```
 
 2. Get the list of changed files:
    ```bash
-   git diff origin/main...HEAD --name-only
+   git diff "$BASE_REF...HEAD" --name-only
    ```
+
+   When stacked, you are reviewing only the delta on top of the parent branch -- do NOT re-review the parent's commits, and do NOT diff against `main` or the final target (that would surface the parent's work as if it were yours).
 
 3. Read the Plan.md for context on intended design
 4. Read Execute.md for implementation notes

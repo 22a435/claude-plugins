@@ -127,6 +127,9 @@ EFFORT="${CLAUDE_CODE_EFFORT_LEVEL:-xhigh}"
 EFFORT_EXPLICIT=false
 RESUME_FROM=""
 ISSUE=""
+CLI_TARGET=""   # --target <branch>   (explicit merge target override)
+CLI_BUMP=""     # --bump major|minor|patch  (semver update-branch routing)
+CLI_ONTO=""     # --onto <branch|PR#> (stack onto an existing feature branch)
 
 # ── Usage / help ──────────────────────────────────────────────────
 usage() {
@@ -141,6 +144,13 @@ Options:
   --effort <level>   Effort level: high, xhigh (default), or max
   --model <model>    Override model for all stages (e.g., sonnet, fable[1m])
   --resume <stage>   Resume from a specific stage (skips prior stages)
+  --target <branch>  Merge target branch (default: main, or per-repo config).
+                     Overrides --bump and the config target.
+  --bump <level>     major|minor|patch -- route to the matching semver
+                     update branch from .claude-workflows.json. Falls back
+                     to a single "semver:<level>" issue label, then config.
+  --onto <branch|PR> Stack this work onto an existing feature branch or open
+                     PR: cut from it and target it (sequential/stacked PRs).
   --help             Show this help message
 
 Stages:
@@ -153,24 +163,33 @@ Stages:
   debug        Root cause analysis and fix (triggered by execute/verify/review)
   verify       Full verification suite; signals debug on failure
   review       Code quality review; signals debug for critical/important issues
-  integrate    Rebase/merge main; skips to done if main hasn't moved
+  integrate    Rebase onto the target branch; skips to done if it hasn't moved
 
 Stage transitions:
   Research, interview, and plan can loop back to earlier stages.
   Execute, verify, and review signal debug when they encounter failures.
   Debug returns to the stage that triggered it after fixing the issue.
   Review signals verify when it makes code changes.
-  Integrate signals done (main clean) or verify (after rebase).
+  Integrate signals done (target clean) or verify (after rebase).
   Skills signal non-default transitions via .next-stage file.
   Before marking the PR ready, a local CI gate re-checks the code state;
   stale state re-runs local CI inline, red re-enters verify, and the PR
   stays draft if local CI cannot go green.
+
+Branching:
+  By default this cuts a branch from origin/main and opens the PR against
+  main. Drop a .claude-workflows.json at the target repo root to change the
+  target branch, define major/minor/patch update branches, set the feature-
+  branch prefix, and list protected branches. With no config and no flags,
+  behavior is identical to before. See the plugin README.
 
 Configuration (env vars):
   ISSUE_WORKFLOW_MODEL              Override model for all stages
   ISSUE_WORKFLOW_MODEL_<STAGE>      Override model for one stage (e.g., _RESEARCH)
   ISSUE_WORKFLOW_EFFORT_<STAGE>     Override effort for one stage
   ISSUE_WORKFLOW_SKILL_PREFIX       Skill name prefix (e.g., "issue-workflow:")
+  ISSUE_WORKFLOW_TARGET_BRANCH      Merge target override (like --target)
+  ISSUE_WORKFLOW_BRANCH_PREFIX      Feature-branch prefix (default "claude")
   ISSUE_WORKFLOW_SKIP_CI_GATE       Set to skip the pre-ready local CI gate
   CLAUDE_PLUGINS_SKIP_UPDATE        Set to skip the startup marketplace refresh
 
@@ -186,6 +205,9 @@ Examples:
   work-issue 42 --model sonnet      # Use sonnet for all stages
   work-issue 42 --resume plan       # Resume from planning stage
   work-issue 42 --resume verify     # Re-run verification
+  work-issue 42 --target develop    # Cut from / merge into develop
+  work-issue 42 --bump minor        # Route to the minor update branch
+  work-issue 43 --onto 42           # Stack #43 onto issue #42's open PR
 EOF
   exit "${1:-0}"
 }
@@ -210,6 +232,9 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --resume) RESUME_FROM="${2:?--resume requires a stage name}"; shift 2 ;;
+    --target) CLI_TARGET="${2:?--target requires a branch name}"; shift 2 ;;
+    --bump)   CLI_BUMP="${2:?--bump requires major, minor, or patch}"; shift 2 ;;
+    --onto)   CLI_ONTO="${2:?--onto requires a branch name or PR number}"; shift 2 ;;
     --help)   usage 0 ;;
     *)        echo "Error: unknown option: $1"; usage 1 ;;
   esac
@@ -228,6 +253,12 @@ if [[ -n "$RESUME_FROM" ]]; then
     echo "Valid stages: ${ALL_STAGES[*]}"
     exit 1
   fi
+fi
+
+# Validate bump level if provided
+if [[ -n "$CLI_BUMP" && "$CLI_BUMP" != "major" && "$CLI_BUMP" != "minor" && "$CLI_BUMP" != "patch" ]]; then
+  echo "Error: invalid --bump '${CLI_BUMP}' (expected major, minor, or patch)"
+  exit 1
 fi
 
 # ── Validate environment ──────────────────────────────────────────
@@ -282,8 +313,25 @@ ISSUE_THREAD="$(echo "$ISSUE_JSON" | jq -r '
 ')"
 GITHUB_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 
-BRANCH="claude/${ISSUE}"
 WORK_DIR="${REPO_ROOT}/claude-work/${ISSUE}"
+
+# ── Resolve branching model (target/base branch, bump routing, stacking) ──
+# Detect a single semver:<level> label so an issue can self-route to its
+# update branch when neither --bump nor --target is given.
+WF_LABEL_BUMP="$(echo "$ISSUE_JSON" | jq -r '
+  [.labels[].name | select(test("^semver:(major|minor|patch)$")) | ltrimstr("semver:")]
+  | if length == 1 then .[0] else empty end')"
+WF_TARGET_OVERRIDE="${ISSUE_WORKFLOW_TARGET_BRANCH:-}"
+WF_PREFIX_OVERRIDE="${ISSUE_WORKFLOW_BRANCH_PREFIX:-}"
+# shellcheck source=_branch-lib.sh
+source "${SCRIPT_DIR}/_branch-lib.sh"
+resolve_branches || { echo "Error: could not resolve target branch."; exit 1; }
+# On --resume, reuse the base the branch was set up with (recorded at setup).
+if [[ -n "$RESUME_FROM" ]]; then
+  load_branch_meta "$WORK_DIR" || true
+fi
+
+BRANCH="${WF_BRANCH_PREFIX}/${ISSUE}"
 
 # ── Banner ────────────────────────────────────────────────────────
 echo ""
@@ -291,6 +339,9 @@ echo "════════════════════════�
 echo "  Issue #${ISSUE}: ${ISSUE_TITLE}"
 echo "  Repo:   ${GITHUB_REPO}"
 echo "  Branch: ${BRANCH}"
+echo "  Target: ${WF_TARGET}"
+[[ -n "$WF_BUMP" ]] && echo "  Bump:   ${WF_BUMP}"
+[[ -n "$WF_STACK_FINAL_TARGET" ]] && echo "  Stack:  onto ${WF_TARGET} (final target ${WF_STACK_FINAL_TARGET}${WF_STACK_PARENT_PR:+, parent PR #${WF_STACK_PARENT_PR}})"
 echo "  Effort: ${EFFORT}"
 [[ -n "$RESUME_FROM" ]] && echo "  Resume: from ${RESUME_FROM}"
 echo "═══════════════════════════════════════════════════════════"
@@ -487,7 +538,7 @@ fi
 
 # ── Ensure correct branch (needed for resume or wrong checkout) ──
 if [[ "$current_stage" != "setup" ]]; then
-  git fetch origin main 2>/dev/null || true
+  git fetch origin "$WF_TARGET" 2>/dev/null || true
   current_branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
   if [[ "$current_branch" != "$BRANCH" ]]; then
     if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
@@ -555,10 +606,19 @@ while true; do
   stage_model="${STAGE_MODEL[$current_stage]}"
   stage_effort="$(resolve_stage_effort "$current_stage")"
 
-  # Trivial integration: if main hasn't diverged, handle entirely in bash
+  # Trivial integration: if the target branch hasn't diverged, handle it in bash
   if [[ "$current_stage" == "integrate" ]]; then
-    git fetch origin main 2>/dev/null || true
-    diverged_commits=$(git log --oneline HEAD..origin/main 2>/dev/null | wc -l)
+    # Effective integration base. When stacked and the parent PR has merged,
+    # GitHub retargets this PR onto the final target -- measure divergence
+    # against that, not the (now-merged) parent branch.
+    integ_target="$WF_TARGET"; integ_base="$WF_BASE_REF"
+    if [[ -n "$WF_STACK_PARENT_PR" && -n "$WF_STACK_FINAL_TARGET" ]] \
+       && [[ "$(gh pr view "$WF_STACK_PARENT_PR" --json state -q .state 2>/dev/null)" == "MERGED" ]]; then
+      echo "  Parent PR #${WF_STACK_PARENT_PR} merged; measuring integration against final target ${WF_STACK_FINAL_TARGET}."
+      integ_target="$WF_STACK_FINAL_TARGET"; integ_base="origin/${WF_STACK_FINAL_TARGET}"
+    fi
+    git fetch origin "$integ_target" 2>/dev/null || true
+    diverged_commits=$(git log --oneline "HEAD..${integ_base}" 2>/dev/null | wc -l)
     if [[ $diverged_commits -eq 0 ]]; then
       stage_banner "$current_stage" "${STAGE_DESC[$current_stage]}" "bash (inline)" "n/a"
 
@@ -567,14 +627,14 @@ while true; do
 # Integration Report: Issue #${ISSUE}
 
 ## Summary
-origin/main has not diverged. No integration needed. Branch is ready for merge.
+\`${integ_base}\` has not diverged. No integration needed. Branch is ready for merge.
 INTEG_EOF
 
       # Commit, push, comment on PR
       git add "${WORK_DIR}/Integration.md"
       git commit -m "claude-work(integrate): no integration needed for issue #${ISSUE}"
       git push
-      gh pr comment "$BRANCH" --body "**Integration:** origin/main has not diverged. No integration needed. Branch is ready for merge." 2>/dev/null || true
+      gh pr comment "$BRANCH" --body "**Integration:** \`${integ_base}\` has not diverged. No integration needed. Branch is ready for merge." 2>/dev/null || true
 
       # Signal done and advance
       echo "done" > "${WORK_DIR}/.next-stage"
@@ -589,19 +649,23 @@ INTEG_EOF
   case "$current_stage" in
     # ── SETUP (inline -- unique logic, not a skill) ────────────
     setup)
-      # Create or switch to branch
-      git fetch origin main 2>/dev/null || true
+      # Create or switch to branch. Cut from the resolved base ref
+      # (origin/<target>, or origin/<parent> when stacking with --onto).
+      git fetch origin "$WF_TARGET" 2>/dev/null || true
       if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
         echo "Branch ${BRANCH} exists. Switching to it."
         git checkout "$BRANCH"
         git pull origin "$BRANCH" 2>/dev/null || true
       else
-        echo "Creating branch ${BRANCH} from origin/main."
-        git checkout -b "$BRANCH" origin/main
+        echo "Creating branch ${BRANCH} from ${WF_BASE_REF}."
+        git checkout -b "$BRANCH" "$WF_BASE_REF"
       fi
 
       # Create work directory
       mkdir -p "$WORK_DIR"
+
+      # Record the resolved branching decision so --resume reuses this base.
+      write_branch_meta "$WORK_DIR"
 
       # Write Issue.md (header uses variable expansion; body appended literally
       # via printf to prevent command injection from issue text)
@@ -612,6 +676,7 @@ INTEG_EOF
 - **Repository:** ${GITHUB_REPO}
 - **Issue:** [#${ISSUE}](https://github.com/${GITHUB_REPO}/issues/${ISSUE})
 - **Branch:** \`${BRANCH}\`
+- **Merge target:** \`${WF_TARGET}\`${WF_BUMP:+ (bump: ${WF_BUMP})}${WF_STACK_FINAL_TARGET:+ -- stacked; final target \`${WF_STACK_FINAL_TARGET}\`${WF_STACK_PARENT_PR:+, parent PR #${WF_STACK_PARENT_PR}}}
 - **Labels:** ${ISSUE_LABELS:-none}
 
 ## Issue Text
@@ -627,7 +692,7 @@ ISSUE_EOF
       } >> "${WORK_DIR}/Issue.md"
 
       # Commit and push
-      git add "${WORK_DIR}/Issue.md"
+      git add "${WORK_DIR}/Issue.md" "${WORK_DIR}/.branch-meta.json"
       git commit -m "claude-work: begin issue #${ISSUE} -- ${ISSUE_TITLE}"
       git push -u origin "$BRANCH"
 

@@ -89,7 +89,7 @@ If the gaps indicate the plan itself was inconsistent (not just a failed API cal
 git add ./claude-triages/$0/Verify.md
 git commit -m "claude-triage(verify): verify GitHub state matches plan [session #$0]"
 git push
-gh pr comment "claude/triage/$0" --body "**Verify complete (session #$0):** <PASS | REPAIRED N gaps | FAIL>. Final open backlog: <N> issues."
+gh pr comment --body "**Verify complete (session #$0):** <PASS | REPAIRED N gaps | FAIL>. Final open backlog: <N> issues."
 ```
 
 ## Stage Transition Signal

@@ -94,7 +94,7 @@ Write `./claude-triages/$0/Reconcile.md`:
 git add ./claude-triages/$0/Reconcile.md
 git commit -m "claude-triage(reconcile): classify items against current code [session #$0]"
 git push
-gh pr comment "claude/triage/$0" --body "**Reconcile complete (session #$0):** <X> already-fixed, <Y> duplicate clusters, <Z> still-live. Proceeding to cluster."
+gh pr comment --body "**Reconcile complete (session #$0):** <X> already-fixed, <Y> duplicate clusters, <Z> still-live. Proceeding to cluster."
 ```
 
 ## Stage Transition Signal

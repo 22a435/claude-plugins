@@ -193,7 +193,7 @@ git push
 
 Post summary to PR:
 ```bash
-gh pr comment "claude/review/$0" --body "**Update Tooling:** <N> tools installed, <N> already present, <N> failed. Persisted to repo: <list>."
+gh pr comment --body "**Update Tooling:** <N> tools installed, <N> already present, <N> failed. Persisted to repo: <list>."
 ```
 
 ## Stage Transition Signal

@@ -81,7 +81,7 @@ When an answer is ambiguous or raises a new question, issue a follow-up `AskUser
 git add ./claude-triages/$0/Interview.md
 git commit -m "claude-triage(interview): triage plan <approved|sent back for re-planning> [session #$0]"
 git push
-gh pr comment "claude/triage/$0" --body "**Interview complete (session #$0):** plan <APPROVED -- proceeding to consolidate | sent back to <stage> for re-planning>. <summary of final counts>."
+gh pr comment --body "**Interview complete (session #$0):** plan <APPROVED -- proceeding to consolidate | sent back to <stage> for re-planning>. <summary of final counts>."
 ```
 
 ## Stage Transition Signal

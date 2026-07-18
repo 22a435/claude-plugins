@@ -113,7 +113,7 @@ Synthesize all subagent results into `./claude-triages/$0/Inventory.md`:
 git add ./claude-triages/$0/Inventory.md
 git commit -m "claude-triage(inventory): inventory of open issues and TODOs [session #$0]"
 git push
-gh pr comment "claude/triage/$0" --body "**Inventory complete (session #$0):** <N> open issues read in full, <M> in-code TODO candidates catalogued. Proceeding to reconcile."
+gh pr comment --body "**Inventory complete (session #$0):** <N> open issues read in full, <M> in-code TODO candidates catalogued. Proceeding to reconcile."
 ```
 
 ## Stage Transition Signal

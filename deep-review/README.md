@@ -72,7 +72,7 @@ The `plan-sc-audit` and `run-sc-audit` stages are conditional -- they only run f
 | **remediation-plan** | opus[1m] | Prioritize fixes and issues; requires user approval |
 | **remediation** | opus[1m] | Apply fixes, create issues, run /code-review cleanup |
 | **verify** | opus[1m] | Verify remediations match plan and code; run local CI |
-| **integrate** | opus[1m] | Prepare branch for merge; rebase onto main if needed |
+| **integrate** | opus[1m] | Prepare branch for merge; rebase onto the target if needed |
 
 ### State Machine
 
@@ -101,6 +101,10 @@ The review stage launches up to 10 parallel sub-reviewers, each with `model: "so
 
 The plan stage determines which sub-reviewers to launch based on the project. Small projects may combine or skip tracks.
 
+## Branching
+
+By default a session cuts its branch from `origin/main` and opens the PR against `main`. Set a single target branch with `--target <branch>`, `DEEP_REVIEW_TARGET_BRANCH`, or a `targetBranch` in a `.claude-workflows.json` at the repo root (e.g. land remediations on `develop`). The same file's `branchPrefix` and `protectedBranches` also apply. With no config and no `--target`, behavior is identical to before. Semver bump-routing (`--bump`) and PR stacking (`--onto`) are **issue-workflow** features; deep-review uses one configured target. See the [root CLAUDE.md](../CLAUDE.md) for the full config schema.
+
 ## Configuration
 
 | Variable | Purpose | Default |
@@ -109,6 +113,8 @@ The plan stage determines which sub-reviewers to launch based on the project. Sm
 | `DEEP_REVIEW_MODEL_<STAGE>` | Override model for one stage | per-stage default |
 | `DEEP_REVIEW_EFFORT_<STAGE>` | Override effort for one stage | per-stage default |
 | `DEEP_REVIEW_SKILL_PREFIX` | Skill name prefix | `deep-review:` |
+| `DEEP_REVIEW_TARGET_BRANCH` | Merge target override (like `--target`) | `main` / config |
+| `DEEP_REVIEW_BRANCH_PREFIX` | Feature-branch prefix | `claude` / config |
 | `DEEP_REVIEW_SKIP_CI_GATE` | Skip the pre-ready local CI gate | unset |
 
 ## Session Folder

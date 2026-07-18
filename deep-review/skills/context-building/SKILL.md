@@ -188,15 +188,20 @@ git push
 
 ### Step 8: Create Draft PR
 
-Create a draft Pull Request with a summary of the context:
+Create a draft Pull Request with a summary of the context. Open it against the **configured target branch**, not `main` unless `main` is the configured target:
 
 ```bash
+# Precedence: env vars (set by the orchestrator) > .branch-meta.json > main.
+META="./claude-reviews/$0/.branch-meta.json"
+TARGET="${WF_TARGET:-$(jq -r '.wfTarget // empty' "$META" 2>/dev/null)}"
+TARGET="${TARGET:-main}"
+
 gh pr create \
   --title "Deep Review Session #$0" \
   --body "<context summary: project type, stack, key findings, tool recommendations>" \
   --draft \
-  --base main \
-  --head "claude/review/$0"
+  --base "$TARGET" \
+  --head "$(git branch --show-current)"
 ```
 
 The PR body should contain:
@@ -211,7 +216,7 @@ The PR body should contain:
 Post a structured summary to the PR thread:
 
 ```bash
-gh pr comment "claude/review/$0" --body "<context summary>"
+gh pr comment --body "<context summary>"
 ```
 
 ## Stage Transition Signal
