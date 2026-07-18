@@ -152,7 +152,7 @@ For repos that don't keep a canonical version file (versioned purely by git tags
 
 | Command | What it does |
 |---------|--------------|
-| `branchflow init` | Create the accumulator branches off the release branch; print protection + Action setup steps. |
+| `branchflow init` | Interactive turnkey setup (smart, repo-detected defaults; `--yes` accepts all). Scaffolds `.claude-workflows.json` if missing, commits it to the release branch, creates the accumulator branches, offers a baseline tag, and — with repo admin — sets merge-commit-only + branch protection via the GitHub API. Idempotent. |
 | `branchflow status [--check]` | Per line: pending↑ vs main, behind↓, next version; the invariant matrix. `--check` exits non-zero on violation (CI gate). |
 | `branchflow cascade [<level>]` | Forward-merge lower lines UP via PRs. `--auto-merge` lands clean ones; conflicts get a Claude-resolved PR. No `<level>` cascades all. |
 | `branchflow promote <level\|bump>` | Open a version-bump PR from a line into `main`. Refuses on a violated invariant unless `--force`. `--auto-merge` lands it (when the env allows), else waits for manual merge. |
@@ -165,10 +165,20 @@ Global flags: `--yes` (skip confirmations), `--auto-merge`, `--force`, `--repo-d
 ### One-time setup
 
 ```bash
-branchflow init
-# then on GitHub: require PRs (branch protection) on main + major/minor/patch,
-# and set your merge method to "merge commit" (NOT squash) for these branches.
+branchflow init      # interactive; press enter to accept each detected default
 ```
+
+`init` walks you through it: it detects your default branch and version file,
+proposes a `.claude-workflows.json`, commits it to the release branch, creates
+the `major`/`minor`/`patch` branches, offers a baseline tag, and (if you have
+repo admin) sets the merge method to **merge-commit only** and requires PRs on
+all the managed branches via the GitHub API. Run `branchflow init --yes` to
+accept every default non-interactively. It's idempotent — safe to re-run.
+
+If you'd rather configure by hand, write `.claude-workflows.json` yourself (see
+Configuration above) and `init` will skip the scaffold and just create branches
++ apply settings. The one setting that matters most: **disable squash-merge** on
+these branches — squash rewrites commit SHAs and breaks the cascade.
 
 ### A single patch fix
 

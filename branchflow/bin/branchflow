@@ -20,7 +20,7 @@ set -uo pipefail
 #
 # Config lives in the target repo's .claude-workflows.json (shared with
 # the feature plugins). Commands:
-#   init       Create the accumulator branches and scaffold config
+#   init       Interactive turnkey setup: scaffold config + create branches
 #   status     Show pending work, the invariant matrix, and versions
 #   cascade    Forward-merge lower lines up into higher ones (via PRs)
 #   promote    Open a version-bump PR from a line into the release branch
@@ -53,8 +53,11 @@ and cut version-bump release PRs into the release branch. Merge-only and
 PR-driven -- accumulators are never force-pushed.
 
 Commands:
-  init                 Create accumulator branches off the release branch and
-                       scaffold/patch .claude-workflows.json + protected list
+  init                 Interactive turnkey setup (smart defaults, --yes accepts
+                       all): scaffold .claude-workflows.json if missing, create
+                       the accumulator branches off the release branch, offer a
+                       baseline tag, and (with repo admin) set merge-commit-only
+                       + branch protection via the GitHub API. Idempotent.
   status [--check]     Show each line's pending diff vs the release branch, the
                        invariant matrix (is every lower line contained in the
                        higher ones?), and current/next versions.
@@ -165,6 +168,35 @@ confirm() {
   local reply
   read -rp "$1 [y/N] " reply
   [[ "$reply" =~ ^[Yy] ]]
+}
+
+# ask VARNAME "prompt" "default" -- read a value with a default; --yes takes it.
+ask() {
+  local __v="$1" __p="$2" __d="$3" __a
+  if [[ "$FLAG_YES" == "true" ]]; then printf -v "$__v" '%s' "$__d"; return; fi
+  read -rp "  ${__p} [${__d}]: " __a
+  printf -v "$__v" '%s' "${__a:-$__d}"
+}
+
+# ask_yn "prompt" "Y|N" -- yes/no with a default; --yes takes the default.
+ask_yn() {
+  local __p="$1" __d="${2:-N}" __a __h
+  if [[ "$FLAG_YES" == "true" ]]; then [[ "$__d" == "Y" ]]; return; fi
+  [[ "$__d" == "Y" ]] && __h="Y/n" || __h="y/N"
+  read -rp "  ${__p} [${__h}] " __a
+  __a="${__a:-$__d}"
+  [[ "$__a" =~ ^[Yy] ]]
+}
+
+# Detect a project version file at the repo root (echoes "none" if absent).
+bf_detect_version_file() {
+  local f
+  for f in package.json Cargo.toml pyproject.toml deno.json composer.json setup.py VERSION version.txt; do
+    [[ -f "${REPO_ROOT}/${f}" ]] && { echo "$f"; return; }
+  done
+  local g; g="$(ls "${REPO_ROOT}"/*.gemspec 2>/dev/null | head -1)"
+  [[ -n "$g" ]] && { basename "$g"; return; }
+  echo "none"
 }
 
 banner() {
@@ -283,31 +315,149 @@ merge_via_pr() {
 # ══════════════════════════════════════════════════════════════════
 
 cmd_init() {
-  require_configured
   banner
+  local repo; repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")"
+  local cur; cur="$(git symbolic-ref --short HEAD 2>/dev/null || echo "")"
+
+  # ── 1. Scaffold the config if no branching model is set yet ──────
+  if [[ "$BF_MODE" == "none" ]]; then
+    echo "No branching model configured yet -- let's set one up."
+    echo "(press enter to accept each [default]; re-run with --yes to accept all)"
+    echo ""
+    local det_release det_vfile model release tagpfx vfile changelog
+    det_release="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || git symbolic-ref --short HEAD 2>/dev/null || echo main)"
+    det_vfile="$(bf_detect_version_file)"
+
+    ask model    "Branching model -- 'trains' (major/minor/patch) or 'single' (one develop line)" "trains"
+    ask release  "Release branch (holds tagged releases)" "$det_release"
+    ask tagpfx   "Tag prefix" "v"
+    ask vfile    "Version file to bump on release (or 'none' for tag-only)" "$det_vfile"
+    ask changelog "Changelog file to maintain (or 'none')" "none"
+
+    local mkey_json prot_json
+    if [[ "$model" == "single" ]]; then
+      local dev; ask dev "Develop/staging branch name" "develop"
+      mkey_json="$(jq -n --arg d "$dev" '{targetBranch:$d}')"
+      prot_json="$(jq -n --arg r "$release" --arg d "$dev" '[$r,$d]')"
+    else
+      local bmaj bmin bpat
+      ask bmaj "major-line branch" "major"; ask bmin "minor-line branch" "minor"; ask bpat "patch-line branch" "patch"
+      mkey_json="$(jq -n --arg a "$bmaj" --arg i "$bmin" --arg p "$bpat" '{updateBranches:{major:$a,minor:$i,patch:$p},defaultBump:"patch"}')"
+      prot_json="$(jq -n --arg r "$release" --arg a "$bmaj" --arg i "$bmin" --arg p "$bpat" '[$r,$a,$i,$p]')"
+    fi
+    local rel_json
+    rel_json="$(jq -n --arg tp "$tagpfx" --arg vf "$vfile" --arg cl "$changelog" \
+      '{versionFrom:"tag", tagPrefix:$tp}
+       + (if $vf=="none" then {versionFile:"none"} else {versionFile:$vf} end)
+       + (if $cl=="none" then {} else {changelogFile:$cl} end)')"
+
+    local existing="{}"; [[ -f "$BF_CONFIG_FILE" ]] && jq -e . "$BF_CONFIG_FILE" >/dev/null 2>&1 && existing="$(cat "$BF_CONFIG_FILE")"
+    local newcfg
+    newcfg="$(jq -n --argjson base "$existing" --argjson mkey "$mkey_json" --argjson rel "$rel_json" --argjson prot "$prot_json" --arg rb "$release" \
+      '$base
+       | (if ($mkey|has("targetBranch")) then del(.updateBranches) else del(.targetBranch) end)
+       | . + $mkey
+       | .releaseBranch = $rb
+       | .protectedBranches = ((.protectedBranches // []) + $prot | unique)
+       | .release = ((.release // {}) + $rel)')"
+    echo ""
+    echo "Proposed ${BF_CONFIG_FILE}:"
+    echo "$newcfg" | jq . | sed 's/^/    /'
+    if ask_yn "Write this config?" Y; then
+      echo "$newcfg" | jq . > "$BF_CONFIG_FILE"
+      echo "  [write] ${BF_CONFIG_FILE}"
+      bf_load_config   # reload with the new model
+    else
+      echo "Aborted (no config written)."; exit 1
+    fi
+  else
+    echo "Using the existing branching model: ${BF_MODE}."
+  fi
+
+  # ── 2. Commit the config on the release branch (accumulators inherit it) ──
   bf_fetch "$BF_RELEASE_BRANCH"
   if ! bf_remote_has "$BF_RELEASE_BRANCH"; then
-    echo "Error: release branch origin/${BF_RELEASE_BRANCH} not found. Push it first."
-    exit 1
+    echo "Error: origin/${BF_RELEASE_BRANCH} not found. Push your release branch first."; exit 1
   fi
+  if [[ -n "$(git status --porcelain .claude-workflows.json 2>/dev/null)" ]]; then
+    if [[ "$cur" == "$BF_RELEASE_BRANCH" ]]; then
+      if ask_yn "Commit .claude-workflows.json to ${BF_RELEASE_BRANCH} and push?" Y; then
+        git add .claude-workflows.json
+        if git commit -qm "chore(branchflow): configure release branches" \
+           && git push -q origin "$BF_RELEASE_BRANCH" 2>/dev/null; then
+          echo "  [push] config committed on ${BF_RELEASE_BRANCH}."
+        else
+          echo "  [warn] push rejected (branch protected?). Open a PR with the config, merge it, then re-run init."
+        fi
+      fi
+    else
+      echo "  [note] config changed but you're on '${cur}', not '${BF_RELEASE_BRANCH}'."
+      echo "         Commit .claude-workflows.json to ${BF_RELEASE_BRANCH} so the new branches inherit it."
+    fi
+  fi
+  bf_fetch "$BF_RELEASE_BRANCH"
+
+  # ── 3. Create the accumulator branches ──
+  echo ""
+  echo "Branches:"
   local b created=0
   for b in $(bf_active_branches); do
     bf_fetch "$b"
-    if bf_remote_has "$b"; then
-      echo "  [ok] ${b} already exists."
+    if bf_remote_has "$b"; then echo "  [ok] ${b} exists."
     else
-      echo "  [create] ${b} from origin/${BF_RELEASE_BRANCH}."
       git branch -f "$b" "origin/${BF_RELEASE_BRANCH}" >/dev/null 2>&1
-      if git push -q -u origin "$b" 2>/dev/null; then created=$((created+1)); else echo "  [warn] could not push ${b}."; fi
+      if git push -q -u origin "$b" 2>/dev/null; then echo "  [create] ${b} from ${BF_RELEASE_BRANCH}"; created=$((created+1))
+      else echo "  [warn] could not push ${b}."; fi
     fi
   done
-  git checkout -q "$BF_RELEASE_BRANCH" 2>/dev/null || true
+
+  # ── 4. Baseline tag ──
+  if [[ "$BF_VERSION_FROM" == "tag" && -z "$(git tag -l "${BF_TAG_PREFIX}*" | head -1)" ]]; then
+    echo ""
+    if ask_yn "No ${BF_TAG_PREFIX}* tags exist. Create a baseline tag so the first promote bumps from it?" Y; then
+      local basev; ask basev "Baseline version" "0.1.0"
+      git fetch origin "$BF_RELEASE_BRANCH" >/dev/null 2>&1 || true
+      git tag "${BF_TAG_PREFIX}${basev}" "origin/${BF_RELEASE_BRANCH}" 2>/dev/null \
+        && git push -q origin "refs/tags/${BF_TAG_PREFIX}${basev}" 2>/dev/null \
+        && echo "  [tag] ${BF_TAG_PREFIX}${basev}" || echo "  [warn] could not create/push the tag."
+    fi
+  fi
+
+  # ── 5. GitHub settings (turnkey; needs repo admin) ──
+  if [[ -n "$repo" ]]; then
+    echo ""
+    echo "GitHub settings (recommended for this model):"
+    if ask_yn "Set merge method to merge-commit only (disable squash & rebase) + enable auto-merge?" Y; then
+      gh api -X PATCH "repos/${repo}" -F allow_merge_commit=true -F allow_squash_merge=false \
+        -F allow_rebase_merge=false -F allow_auto_merge=true >/dev/null 2>&1 \
+        && echo "  [ok] merge-commit only; auto-merge enabled." \
+        || echo "  [warn] could not update merge settings (need admin)."
+    fi
+    if ask_yn "Require PRs (branch protection) on the release + accumulator branches?" Y; then
+      for b in "$BF_RELEASE_BRANCH" $(bf_active_branches); do
+        printf '{"required_status_checks":null,"enforce_admins":false,"required_pull_request_reviews":{"required_approving_review_count":0},"restrictions":null}' \
+          | gh api -X PUT "repos/${repo}/branches/${b}/protection" --input - >/dev/null 2>&1 \
+          && echo "  [ok] protected ${b}" || echo "  [warn] could not protect ${b} (need admin)."
+      done
+    fi
+  else
+    echo ""
+    echo "[note] no GitHub remote detected -- set branch protection and merge-commit-only method yourself."
+  fi
+
+  # ── 6. Optional eager-cascade Action ──
   echo ""
-  echo "Created ${created} branch(es). Next steps:"
-  echo "  1. On GitHub, protect these branches (require PRs): ${BF_RELEASE_BRANCH} $(bf_active_branches | tr '\n' ' ')"
-  echo "  2. (Optional) Install the eager-cascade Action:"
-  echo "       cp ${PLUGIN_ROOT}/templates/branchflow.yml .github/workflows/"
-  echo "  3. Route feature work with: work-issue <n> --bump <level>  (or --target <branch>)"
+  if ask_yn "Install the eager-cascade GitHub Action (.github/workflows/branchflow.yml)?" N; then
+    mkdir -p "${REPO_ROOT}/.github/workflows"
+    cp "${PLUGIN_ROOT}/templates/branchflow.yml" "${REPO_ROOT}/.github/workflows/branchflow.yml" \
+      && echo "  [write] .github/workflows/branchflow.yml -- edit the branch names to match, then commit it." \
+      || echo "  [warn] could not copy the template."
+  fi
+
+  echo ""
+  echo "branchflow is set up. Next:"
+  echo "  branchflow status                          # see the lines + invariant"
+  echo "  work-issue <n> --bump <level>              # route feature work into a line"
 }
 
 cmd_status() {
