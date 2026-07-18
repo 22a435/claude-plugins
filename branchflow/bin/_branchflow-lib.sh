@@ -34,6 +34,8 @@ bf_load_config() {
   BF_VERSION_FROM="tag"
   BF_VERSION_FILE="none"
   BF_CHANGELOG_FILE=""
+  BF_RELEASE_COMMAND=""   # delegate versioning (e.g. monorepo: "npx changeset version")
+  BF_TAG_COMMAND=""       # delegate per-package tagging (e.g. "npx changeset tag")
   BF_LEVELS=()
   BF_HAS_UPDATE_BRANCHES="false"
   BF_SINGLE_TARGET=""
@@ -47,6 +49,8 @@ bf_load_config() {
     v="$(jq -r '.release.versionFrom    // empty' "$cfg")"; [[ -n "$v" ]] && BF_VERSION_FROM="$v"
     v="$(jq -r '.release.versionFile    // empty' "$cfg")"; [[ -n "$v" ]] && BF_VERSION_FILE="$v"
     v="$(jq -r '.release.changelogFile  // empty' "$cfg")"; [[ -n "$v" ]] && BF_CHANGELOG_FILE="$v"
+    v="$(jq -r '.release.command        // empty' "$cfg")"; [[ -n "$v" ]] && BF_RELEASE_COMMAND="$v"
+    v="$(jq -r '.release.tagCommand     // empty' "$cfg")"; [[ -n "$v" ]] && BF_TAG_COMMAND="$v"
 
     # Present levels, in canonical low->high order.
     local lvl branch

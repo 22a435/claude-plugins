@@ -88,6 +88,8 @@ optional `release` block. All keys optional.
 | `release.versionFile` | File `promote` bumps (`package.json`, …); `none` = tag-only | `none` |
 | `release.tagPrefix` | Release tag prefix | `v` |
 | `release.changelogFile` | Changelog `promote` maintains | — |
+| `release.command` | Delegate versioning: command `promote` runs in the release branch (monorepos — see Example D) | — |
+| `release.tagCommand` | Delegate tagging: command `reconcile` runs for per-package tags | — |
 
 > The file must be **strict JSON** (no `//` comments — those below are illustrative).
 
@@ -147,6 +149,40 @@ For repos that don't keep a canonical version file (versioned purely by git tags
   "release": { "versionFrom": "tag", "versionFile": "none", "tagPrefix": "v" }
 }
 ```
+
+### Example D — monorepo (delegated versioning)
+
+The semver-accumulator model is inherently **single-version** — there's no one
+release "size" when `pkg-a` ships a patch while `pkg-b` ships a major. So for a
+multi-package monorepo, use **develop mode** for branch topology and **delegate
+versioning** to a purpose-built tool (changesets / nx / lerna / release-please),
+which owns per-package bumps, dependency bumps, per-package tags, and changelogs.
+
+```json
+{
+  "releaseBranch": "main",
+  "targetBranch": "develop",
+  "protectedBranches": ["main", "develop"],
+  "release": {
+    "versionFrom": "tag",
+    "versionFile": "none",
+    "command": "npx @changesets/cli version",
+    "tagCommand": "npx @changesets/cli tag"
+  }
+}
+```
+
+- `promote` runs `release.command` inside the release branch (it bumps every
+  changed package + writes changelogs), commits the result, and opens the
+  release PR. No single version is computed by branchflow.
+- `reconcile` runs `release.tagCommand` against the merged release to create the
+  per-package tags, pushes them, then merges `main` back down.
+- `branchflow init` detects a monorepo (workspaces / `.changeset` / `nx.json` /
+  `lerna.json`) and pre-fills develop mode + these commands.
+
+`release.command`/`tagCommand` run arbitrary shell from your repo config — the
+same trust model as `package.json` scripts. branchflow only orchestrates the
+branches, PR, and tag push; the tool owns the numbers.
 
 ## Commands
 

@@ -91,6 +91,11 @@ Configuration (.claude-workflows.json at the target repo root):
   release.versionFile          File promote bumps (e.g. package.json); "none"
   release.tagPrefix            Tag prefix (default "v")
   release.changelogFile        Changelog promote maintains (optional)
+  release.command              Delegate versioning: command promote runs in the
+                               release branch (e.g. "npx changeset version").
+                               For monorepos -- the tool owns per-package bumps.
+  release.tagCommand           Delegate tagging: command reconcile runs to make
+                               per-package tags (e.g. "npx changeset tag").
 
 Env vars:
   BRANCHFLOW_MODEL / BRANCHFLOW_EFFORT   Model/effort for Claude-assisted steps
@@ -197,6 +202,21 @@ bf_detect_version_file() {
   local g; g="$(ls "${REPO_ROOT}"/*.gemspec 2>/dev/null | head -1)"
   [[ -n "$g" ]] && { basename "$g"; return; }
   echo "none"
+}
+
+# Heuristic: does this look like a multi-package monorepo?
+bf_is_monorepo() {
+  [[ -f "${REPO_ROOT}/pnpm-workspace.yaml" || -f "${REPO_ROOT}/lerna.json" \
+     || -f "${REPO_ROOT}/nx.json" || -d "${REPO_ROOT}/.changeset" ]] && return 0
+  [[ -f "${REPO_ROOT}/package.json" ]] && jq -e '.workspaces' "${REPO_ROOT}/package.json" >/dev/null 2>&1 && return 0
+  return 1
+}
+
+# Suggest "<versionCmd>|<tagCmd>" for a detected release tool, or "".
+bf_detect_release_tool() {
+  [[ -d "${REPO_ROOT}/.changeset" ]] && { echo "npx @changesets/cli version|npx @changesets/cli tag"; return; }
+  [[ -f "${REPO_ROOT}/lerna.json" ]] && { echo "npx lerna version --yes|"; return; }
+  echo ""
 }
 
 banner() {
@@ -327,12 +347,26 @@ cmd_init() {
     local det_release det_vfile model release tagpfx vfile changelog
     det_release="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || git symbolic-ref --short HEAD 2>/dev/null || echo main)"
     det_vfile="$(bf_detect_version_file)"
+    # Monorepos default to develop mode (one topology line) + delegated,
+    # per-package versioning -- the semver-accumulator model is single-version.
+    local det_model="semver"; bf_is_monorepo && { det_model="develop"; echo "  (detected a monorepo -- defaulting to develop mode + delegated versioning)"; echo ""; }
 
-    ask model    "Branching model -- 'semver' (major/minor/patch lines) or 'develop' (one line)" "semver"
+    ask model    "Branching model -- 'semver' (major/minor/patch lines) or 'develop' (one line)" "$det_model"
     ask release  "Release branch (holds tagged releases)" "$det_release"
     ask tagpfx   "Tag prefix" "v"
     ask vfile    "Version file to bump on release (or 'none' for tag-only)" "$det_vfile"
     ask changelog "Changelog file to maintain (or 'none')" "none"
+
+    # Optional delegated versioning (monorepo / external release tool).
+    local rel_cmd="" rel_tagcmd="" det_tool det_vcmd det_tcmd
+    det_tool="$(bf_detect_release_tool)"; det_vcmd="${det_tool%%|*}"; det_tcmd="${det_tool#*|}"
+    if [[ -n "$det_vcmd" ]] || bf_is_monorepo; then
+      if ask_yn "Delegate release versioning to an external command (recommended for monorepos)?" "$( [[ -n "$det_vcmd" ]] && echo Y || echo N )"; then
+        ask rel_cmd    "Version command (run inside the release branch at promote)" "$det_vcmd"
+        ask rel_tagcmd "Tag command (run at reconcile; blank = branchflow single tag)" "$det_tcmd"
+        [[ -n "$rel_cmd" ]] && vfile="none"   # the tool owns version files
+      fi
+    fi
 
     local mkey_json prot_json
     if [[ "$model" == "develop" ]]; then
@@ -346,10 +380,12 @@ cmd_init() {
       prot_json="$(jq -n --arg r "$release" --arg a "$bmaj" --arg i "$bmin" --arg p "$bpat" '[$r,$a,$i,$p]')"
     fi
     local rel_json
-    rel_json="$(jq -n --arg tp "$tagpfx" --arg vf "$vfile" --arg cl "$changelog" \
+    rel_json="$(jq -n --arg tp "$tagpfx" --arg vf "$vfile" --arg cl "$changelog" --arg rc "$rel_cmd" --arg tc "$rel_tagcmd" \
       '{versionFrom:"tag", tagPrefix:$tp}
        + (if $vf=="none" then {versionFile:"none"} else {versionFile:$vf} end)
-       + (if $cl=="none" then {} else {changelogFile:$cl} end)')"
+       + (if $cl=="none" then {} else {changelogFile:$cl} end)
+       + (if $rc=="" then {} else {command:$rc} end)
+       + (if $tc=="" then {} else {tagCommand:$tc} end)')"
 
     local existing="{}"; [[ -f "$BF_CONFIG_FILE" ]] && jq -e . "$BF_CONFIG_FILE" >/dev/null 2>&1 && existing="$(cat "$BF_CONFIG_FILE")"
     local newcfg
@@ -466,8 +502,13 @@ cmd_status() {
   local branches; branches="$(bf_active_branches)"
   bf_fetch "$BF_RELEASE_BRANCH" $branches
 
+  local delegated="false"; [[ -n "$BF_RELEASE_COMMAND" ]] && delegated="true"
   local cur; cur="$(bf_current_version)"
-  echo "Current released version: ${BF_TAG_PREFIX}${cur}  (release branch: ${BF_RELEASE_BRANCH})"
+  if [[ "$delegated" == "true" ]]; then
+    echo "Versioning: delegated to release.command (per-package)  (release branch: ${BF_RELEASE_BRANCH})"
+  else
+    echo "Current released version: ${BF_TAG_PREFIX}${cur}  (release branch: ${BF_RELEASE_BRANCH})"
+  fi
   echo ""
   # pending↑/behind↓ are CONTENT counts (changes, ignoring merge commits), so
   # they agree with what promote/reconcile actually do.
@@ -479,7 +520,9 @@ cmd_status() {
     ahead="$(bf_content_ahead "origin/${BF_RELEASE_BRANCH}" "origin/${b}")"
     behind="$(bf_content_ahead "origin/${b}" "origin/${BF_RELEASE_BRANCH}")"
     lvl="$(bf_level_of "$b")"
-    if [[ -n "$lvl" ]]; then nextv="${BF_TAG_PREFIX}$(bf_bump_version "$cur" "$lvl")"; else nextv="(bump at promote)"; fi
+    if [[ "$delegated" == "true" ]]; then nextv="(delegated)"
+    elif [[ -n "$lvl" ]]; then nextv="${BF_TAG_PREFIX}$(bf_bump_version "$cur" "$lvl")"
+    else nextv="(bump at promote)"; fi
     printf "  %-12s %6s     %6s    %s\n" "$b" "$ahead" "$behind" "$nextv"
   done
 
@@ -551,20 +594,23 @@ cmd_cascade() {
 
 cmd_promote() {
   require_configured
-  [[ -z "$CMD_ARG" ]] && { echo "Error: promote requires a level or bump (major|minor|patch$( [[ "$BF_MODE" == "semver" ]] && echo " or a line name"))."; exit 1; }
   banner
+  local delegated="false"; [[ -n "$BF_RELEASE_COMMAND" ]] && delegated="true"
 
-  # Resolve the line branch + bump level.
-  local level line
+  # Resolve the line branch (+ bump level, unless versioning is delegated).
+  local level="" line
   if [[ "$BF_MODE" == "semver" ]]; then
+    [[ -z "$CMD_ARG" ]] && { echo "Error: promote <line> -- which line to release (major|minor|patch)."; exit 1; }
     level="$(bf_level_of "$CMD_ARG")"
     [[ -z "$level" ]] && level="$CMD_ARG"     # allow bare bump names too
     case "$level" in major|minor|patch) ;; *) echo "Error: '${CMD_ARG}' is not a configured line or bump level."; exit 1 ;; esac
     line="$(bf_branch_for_level "$level")"
     [[ -z "$line" ]] && { echo "Error: no branch configured for level '${level}'."; exit 1; }
   else
-    case "$CMD_ARG" in major|minor|patch) level="$CMD_ARG" ;; *) echo "Error: in develop mode, promote takes a bump: major|minor|patch."; exit 1 ;; esac
     line="$BF_SINGLE_TARGET"
+    if [[ "$delegated" != "true" ]]; then
+      case "$CMD_ARG" in major|minor|patch) level="$CMD_ARG" ;; *) echo "Error: in develop mode, promote takes a bump: major|minor|patch."; exit 1 ;; esac
+    fi   # delegated: the release.command computes per-package bumps; no level needed
   fi
 
   bf_fetch "$BF_RELEASE_BRANCH" "$line"
@@ -597,6 +643,45 @@ cmd_promote() {
   # Anything to release?
   local ahead; ahead="$(bf_content_ahead "origin/${BF_RELEASE_BRANCH}" "origin/${line}")"
   if [[ "$ahead" -eq 0 ]]; then echo "Nothing to promote: ${line} has no changes beyond ${BF_RELEASE_BRANCH}."; exit 0; fi
+
+  # ── Delegated versioning (monorepo / external tool) ──────────────
+  # release.command owns per-package version bumps + changelogs; branchflow
+  # only prepares the release branch, runs it, and opens the PR.
+  if [[ "$delegated" == "true" ]]; then
+    echo "Promoting ${line} -> ${BF_RELEASE_BRANCH}  (versioning delegated to release.command)."
+    echo "  ${ahead} change(s) to release."
+    confirm "Run release.command and open the release PR?" || { echo "Aborted."; exit 1; }
+    local rb="branchflow/release/$(git rev-parse --short "origin/${line}" 2>/dev/null || echo rel)"
+    git branch -f "$rb" "origin/${line}" >/dev/null 2>&1
+    git checkout -q "$rb"
+    echo "  [run] ${BF_RELEASE_COMMAND}"
+    if ! ( cd "$REPO_ROOT" && bash -c "$BF_RELEASE_COMMAND" ); then
+      echo "Error: release.command failed; aborting (no PR opened)."
+      git checkout -q "$BF_RELEASE_BRANCH" 2>/dev/null || true; git branch -D "$rb" >/dev/null 2>&1 || true; exit 1
+    fi
+    if [[ -z "$(git status --porcelain)" ]]; then
+      echo "release.command produced no changes (nothing to release?). Aborting."
+      git checkout -q "$BF_RELEASE_BRANCH" 2>/dev/null || true; git branch -D "$rb" >/dev/null 2>&1 || true; exit 0
+    fi
+    git add -A; git commit -qm "branchflow(release): delegated version bump" 2>/dev/null || true
+    git push -q -u origin "$rb" 2>/dev/null || { echo "Error: could not push ${rb}."; git checkout -q "$BF_RELEASE_BRANCH" 2>/dev/null || true; exit 1; }
+    local pr_url
+    pr_url="$(gh pr create --base "$BF_RELEASE_BRANCH" --head "$rb" \
+      --title "Release: ${line} -> ${BF_RELEASE_BRANCH}" \
+      --body "Automated release PR by branchflow. Per-package versions and changelogs were computed by the delegated tool (\`${BF_RELEASE_COMMAND}\`). After this merges, run \`branchflow reconcile\` to create tags$( [[ -n "$BF_TAG_COMMAND" ]] && echo " (via release.tagCommand)" ) and sync \`${BF_RELEASE_BRANCH}\` back down." 2>/dev/null)" \
+      || { echo "Error: could not open release PR."; git checkout -q "$BF_RELEASE_BRANCH" 2>/dev/null || true; exit 1; }
+    git checkout -q "$BF_RELEASE_BRANCH" 2>/dev/null || true
+    local pr_num="${pr_url##*/}"
+    echo "Release PR: ${pr_url}"
+    if [[ "$FLAG_AUTO_MERGE" == "true" ]]; then
+      gh pr merge "$pr_num" --merge --auto >/dev/null 2>&1 \
+        && echo "Auto-merge enabled; run 'branchflow reconcile' after it merges." \
+        || echo "Auto-merge unavailable; merge the PR manually, then run 'branchflow reconcile'."
+    else
+      echo "Review and merge the PR, then run: branchflow reconcile"
+    fi
+    return 0
+  fi
 
   # Compute the new version.
   local cur new; cur="$(bf_current_version)"; new="$(bf_bump_version "$cur" "$level")"
@@ -652,24 +737,42 @@ cmd_reconcile() {
   banner
   bf_fetch "$BF_RELEASE_BRANCH"
 
-  # 1. Tag a just-merged release, if any and not already tagged.
-  local new="$OPT_VERSION"
-  if [[ -z "$new" ]]; then
-    local head; head="$(bf_last_merged_release_head)"
-    [[ -n "$head" ]] && new="$(bf_version_from_release_head "$head")"
-  fi
-  if [[ -n "$new" ]]; then
-    local tag="${BF_TAG_PREFIX}${new}"
-    if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null 2>&1; then
-      echo "  [ok] ${tag} already tagged."
+  # 1. Tag the release. Delegated (per-package) tagging when configured,
+  #    otherwise a single tag derived from the merged release PR.
+  if [[ -n "$BF_TAG_COMMAND" ]]; then
+    echo "  [run] release.tagCommand: ${BF_TAG_COMMAND}"
+    local wt; wt="$(mktemp -d)"
+    if git worktree add --detach "$wt" "origin/${BF_RELEASE_BRANCH}" >/dev/null 2>&1; then
+      # Run the tool's tag command against the released tree, then push tags.
+      # Idempotent: it only creates tags for versions that don't have one yet.
+      ( cd "$wt" && bash -c "$BF_TAG_COMMAND" ) >/dev/null 2>&1 \
+        && ( cd "$wt" && git push -q origin --tags 2>/dev/null ) \
+        && echo "  [tag] per-package tags pushed (via release.tagCommand)." \
+        || echo "  [warn] release.tagCommand or tag push failed."
+      git worktree remove --force "$wt" >/dev/null 2>&1 || true
     else
-      git tag "$tag" "origin/${BF_RELEASE_BRANCH}" 2>/dev/null \
-        && git push -q origin "refs/tags/${tag}" 2>/dev/null \
-        && echo "  [tag] ${tag} -> origin/${BF_RELEASE_BRANCH}" \
-        || echo "  [warn] could not create/push tag ${tag}."
+      echo "  [warn] could not prepare a worktree for tagging."
     fi
+    rm -rf "$wt" 2>/dev/null || true
   else
-    echo "  [note] no merged release detected; skipping tagging (pass --version to force)."
+    local new="$OPT_VERSION"
+    if [[ -z "$new" ]]; then
+      local head; head="$(bf_last_merged_release_head)"
+      [[ -n "$head" ]] && new="$(bf_version_from_release_head "$head")"
+    fi
+    if [[ -n "$new" ]]; then
+      local tag="${BF_TAG_PREFIX}${new}"
+      if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null 2>&1; then
+        echo "  [ok] ${tag} already tagged."
+      else
+        git tag "$tag" "origin/${BF_RELEASE_BRANCH}" 2>/dev/null \
+          && git push -q origin "refs/tags/${tag}" 2>/dev/null \
+          && echo "  [tag] ${tag} -> origin/${BF_RELEASE_BRANCH}" \
+          || echo "  [warn] could not create/push tag ${tag}."
+      fi
+    else
+      echo "  [note] no merged release detected; skipping tagging (pass --version to force)."
+    fi
   fi
 
   # 2. Merge the release branch DOWN into every accumulator (via PRs).
