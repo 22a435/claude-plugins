@@ -11,8 +11,9 @@ set -uo pipefail
 #
 # Stages run as a state machine, not a rigid sequence. Pre-execution
 # stages (research/interview/plan) can loop freely. Post-execution
-# stages (verify/review/integrate) can loop back to verify. A hard
-# wall separates planning from execution.
+# stages (verify/review/integrate) can loop back to verify. Execute
+# and debug can signal themselves to continue long work in a fresh
+# session. A hard wall separates planning from execution.
 #
 # Skills request non-default transitions by writing a stage name to
 # ./claude-work/<issue>/.next-stage
@@ -35,8 +36,8 @@ declare -A ALLOWED_TRANSITIONS=(
   [research]="interview research"
   [interview]="plan research interview"
   [plan]="execute research interview plan"
-  [execute]="verify debug"
-  [debug]="execute verify review"
+  [execute]="verify debug execute"
+  [debug]="execute verify review debug"
   [verify]="review verify debug"
   [review]="integrate verify review debug"
   [integrate]="verify integrate done"
@@ -158,6 +159,8 @@ Stages:
 Stage transitions:
   Research, interview, and plan can loop back to earlier stages.
   Execute, verify, and review signal debug when they encounter failures.
+  Execute and debug can signal themselves to continue long work in a
+  fresh session when a single context window is not enough.
   Debug returns to the stage that triggered it after fixing the issue.
   Review signals verify when it makes code changes.
   Integrate signals done (main clean) or verify (after rebase).
@@ -475,7 +478,7 @@ MARKER_EOF
 }
 
 # ── Loop safety ───────────────────────────────────────────────────
-MAX_STAGE_RUNS=25
+MAX_STAGE_RUNS=40
 stage_run_count=0
 declare -A STAGE_RUN_COUNTS
 
@@ -537,7 +540,7 @@ while true; do
 
   # Loop safety: per-stage limit
   STAGE_RUN_COUNTS[$current_stage]=$(( ${STAGE_RUN_COUNTS[$current_stage]:-0} + 1 ))
-  if [[ ${STAGE_RUN_COUNTS[$current_stage]} -gt 5 ]]; then
+  if [[ ${STAGE_RUN_COUNTS[$current_stage]} -gt 10 ]]; then
     echo ""
     echo "WARNING: Stage '${current_stage}' has run ${STAGE_RUN_COUNTS[$current_stage]} times."
     read -rp "Continue? [y/N] " yn
@@ -547,6 +550,12 @@ while true; do
              exit 1 ;;
     esac
   fi
+
+  # Live stage state for external monitors (untracked, like .next-stage)
+  mkdir -p "$WORK_DIR"
+  printf '{"stage":"%s","started_at":"%s","run_count":%s}\n' \
+    "$current_stage" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${STAGE_RUN_COUNTS[$current_stage]}" \
+    > "${WORK_DIR}/.current-stage"
 
   # Refresh PATH from login shell to pick up tools installed by prior stages
   refresh_env
@@ -670,6 +679,9 @@ done
 # ══════════════════════════════════════════════════════════════════
 #  COMPLETE
 # ══════════════════════════════════════════════════════════════════
+
+printf '{"stage":"done","completed_at":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  > "${WORK_DIR}/.current-stage"
 
 # Mark the PR as ready for review (no longer draft) -- unless the
 # local CI gate could not confirm green against the final code state.
