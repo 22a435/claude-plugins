@@ -11,12 +11,14 @@ A Claude Code plugin marketplace (`22a435-workflows`) containing three plugins t
 ## Plugins
 
 ### issue-workflow
-Autonomous issue-to-PR pipeline. Given a GitHub issue number, produces a reviewed, tested, integration-ready PR across 8 stages.
+Autonomous issue-to-PR pipeline. Given a GitHub issue number, produces a reviewed, tested, integration-ready PR across a multi-stage pipeline.
 
 - CLI: `work-issue <issue-number> [--effort high|max] [--model <model>] [--resume <stage>]`
 - Branch: `claude/<issue-number>`
 - Work dir: `./claude-work/<issue-number>/`
 - Stages: `setup -> research <-> interview <-> plan -> execute <-> debug <-> verify <-> review <-> integrate -> done`
+- Self-loops: execute and debug can signal themselves to continue long work in a fresh session
+- Abandon: any post-setup stage can signal `abandon` -- a user-gated stage that verifies the case, asks for explicit approval, then closes out the PR/branch/issue (declining returns to the signaling stage via `.abandon-origin`)
 - Hard wall: once execution starts, no returning to pre-execution stages
 
 ### deep-review
@@ -76,7 +78,7 @@ Pure bash state machines. They:
 Key orchestrator patterns:
 - **`refresh_env()`** -- re-sources PATH from a login shell after stages that install tools
 - **Trivial integration** -- if main hasn't diverged, the integrate stage skips Claude entirely and handles it inline in bash
-- **Debug origin tracking** -- `issue-workflow` saves which stage triggered debug in `.debug-origin` so debug can return to the correct stage
+- **Debug origin tracking** -- `issue-workflow` saves which stage triggered debug in `.debug-origin` so debug can return to the correct stage; `.abandon-origin` does the same for the abandon stage (declining an abandon returns to the origin, and only the origin)
 - **Local CI pre-ready gate** -- `issue-workflow` and `deep-review` check a committed `.local-ci-state` marker (local CI command + tree-content hash excluding the work dir, written by the verify skill) before `gh pr ready`; stale state re-runs local CI inline or re-enters verify, and the PR stays draft if local CI cannot go green
 
 ### Skills (`skills/<stage>/SKILL.md`)

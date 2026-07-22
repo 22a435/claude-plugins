@@ -27,20 +27,23 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 PLUGIN_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # ── Valid stages (for --resume validation) ────────────────────────
-readonly ALL_STAGES=(setup research interview plan execute debug verify review integrate)
+readonly ALL_STAGES=(setup research interview plan execute debug verify review integrate abandon)
 
 # ── Transition rules ──────────────────────────────────────────────
 # Each stage maps to its space-delimited list of allowed next stages.
+# Abandon may additionally return to the stage recorded in
+# .abandon-origin (validated dynamically in resolve_next_stage).
 declare -A ALLOWED_TRANSITIONS=(
   [setup]="research"
-  [research]="interview research"
-  [interview]="plan research interview"
-  [plan]="execute research interview plan"
-  [execute]="verify debug execute"
-  [debug]="execute verify review debug"
-  [verify]="review verify debug"
-  [review]="integrate verify review debug"
-  [integrate]="verify integrate done"
+  [research]="interview research abandon"
+  [interview]="plan research interview abandon"
+  [plan]="execute research interview plan abandon"
+  [execute]="verify debug execute abandon"
+  [debug]="execute verify review debug abandon"
+  [verify]="review verify debug abandon"
+  [review]="integrate verify review debug abandon"
+  [integrate]="verify integrate done abandon"
+  [abandon]="done"
 )
 
 declare -A DEFAULT_NEXT=(
@@ -53,6 +56,7 @@ declare -A DEFAULT_NEXT=(
   [verify]="review"
   [review]="integrate"
   [integrate]="verify"
+  [abandon]="done"
 )
 
 declare -A STAGE_DESC=(
@@ -65,6 +69,7 @@ declare -A STAGE_DESC=(
   [verify]="Full verification suite"
   [review]="Code quality review"
   [integrate]="Prepare branch for merge"
+  [abandon]="Present the case for abandoning the issue; user-gated teardown"
 )
 
 # ── Skill invocations ─────────────────────────────────────────────
@@ -81,6 +86,7 @@ declare -A STAGE_SKILL=(
   [verify]="/${_PREFIX}verify"
   [review]="/${_PREFIX}review"
   [integrate]="/${_PREFIX}integrate"
+  [abandon]="/${_PREFIX}abandon"
 )
 
 declare -A STAGE_DOC=(
@@ -92,6 +98,7 @@ declare -A STAGE_DOC=(
   [verify]="Verify.md"
   [review]="Review.md"
   [integrate]="Integration.md"
+  [abandon]="Abandon.md"
 )
 
 # ── Model assignments (configurable via env vars) ─────────────────
@@ -108,6 +115,7 @@ declare -A STAGE_MODEL=(
   [verify]="${ISSUE_WORKFLOW_MODEL_VERIFY:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
   [review]="${ISSUE_WORKFLOW_MODEL_REVIEW:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
   [integrate]="${ISSUE_WORKFLOW_MODEL_INTEGRATE:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
+  [abandon]="${ISSUE_WORKFLOW_MODEL_ABANDON:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
 )
 
 # ── Effort assignments (configurable via env vars) ────────────────
@@ -121,6 +129,7 @@ declare -A STAGE_EFFORT=(
   [verify]="${ISSUE_WORKFLOW_EFFORT_VERIFY:-xhigh}"
   [review]="${ISSUE_WORKFLOW_EFFORT_REVIEW:-xhigh}"
   [integrate]="${ISSUE_WORKFLOW_EFFORT_INTEGRATE:-xhigh}"
+  [abandon]="${ISSUE_WORKFLOW_EFFORT_ABANDON:-high}"
 )
 
 # ── Defaults ──────────────────────────────────────────────────────
@@ -155,6 +164,8 @@ Stages:
   verify       Full verification suite; signals debug on failure
   review       Code quality review; signals debug for critical/important issues
   integrate    Rebase/merge main; skips to done if main hasn't moved
+  abandon      User-gated teardown when a stage concludes the issue
+               should not ship (already fixed, obsolete, invalid)
 
 Stage transitions:
   Research, interview, and plan can loop back to earlier stages.
@@ -164,6 +175,9 @@ Stage transitions:
   Debug returns to the stage that triggered it after fixing the issue.
   Review signals verify when it makes code changes.
   Integrate signals done (main clean) or verify (after rebase).
+  Any stage can signal abandon; the abandon stage verifies the case,
+  asks the user to confirm, then tears down the PR/branch/issue --
+  or returns to the signaling stage if the user declines.
   Skills signal non-default transitions via .next-stage file.
   Before marking the PR ready, a local CI gate re-checks the code state;
   stale state re-runs local CI inline, red re-enters verify, and the PR
@@ -367,6 +381,23 @@ resolve_next_stage() {
     rm -f "$signal_file"
     next="${next//[[:space:]]/}"  # trim whitespace
 
+    # Abandon may return only to the stage that signaled it (or done).
+    if [[ "$current" == "abandon" && -n "$next" && "$next" != "done" ]]; then
+      local aorigin=""
+      if [[ -f "${WORK_DIR}/.abandon-origin" ]]; then
+        aorigin="$(< "${WORK_DIR}/.abandon-origin")"
+        aorigin="${aorigin//[[:space:]]/}"
+      fi
+      if [[ -n "$aorigin" && "$next" == "$aorigin" ]]; then
+        echo "[abandon] Declined -- returning to origin stage '${aorigin}'" >&2
+        echo "$next"
+        return
+      fi
+      echo "[abandon] WARNING: requested '${next}' but abandon may only return to its origin ('${aorigin:-unknown}') or signal done. Using default." >&2
+      echo "${DEFAULT_NEXT[$current]}"
+      return
+    fi
+
     if [[ -n "$next" ]] && validate_transition "$current" "$next"; then
       echo "[signal] Stage '${current}' requested transition to '${next}'" >&2
       echo "$next"
@@ -513,6 +544,19 @@ while true; do
   # done -> verify is an orchestrator-level re-entry (like --resume),
   # not a skill transition, so it is not in ALLOWED_TRANSITIONS.
   if [[ "$current_stage" == "done" ]]; then
+    # Abandoned workflows skip the CI gate and PR-ready path entirely.
+    if [[ -f "${WORK_DIR}/.abandoned" ]]; then
+      break
+    fi
+    # Abandon must end in either teardown (.abandoned) or an origin
+    # return -- a bare 'done' from abandon means the session did not
+    # complete its protocol. Refuse to mark the PR ready.
+    if [[ "${previous_stage:-}" == "abandon" ]]; then
+      echo ""
+      echo "ERROR: abandon stage ended without a teardown marker (.abandoned) or an origin-return signal."
+      echo "The abandon session may not have completed. Re-run with: work-issue ${ISSUE} --resume abandon"
+      exit 1
+    fi
     if local_ci_gate; then
       break
     fi
@@ -650,7 +694,7 @@ ISSUE_EOF
       ;;
 
     # ── ALL SKILL-BASED STAGES ─────────────────────────────────
-    research|interview|plan|execute|debug|verify|review|integrate)
+    research|interview|plan|execute|debug|verify|review|integrate|abandon)
       clean_signal_file
       claude --model "$stage_model" --effort "$stage_effort" "${STAGE_SKILL[$current_stage]} ${ISSUE}"
 
@@ -667,6 +711,12 @@ ISSUE_EOF
         echo "$previous_stage" > "${WORK_DIR}/.debug-origin"
         echo "[debug] Saved origin stage '${previous_stage}'"
       fi
+
+      # Save origin when transitioning TO abandon (declining returns here)
+      if [[ "$current_stage" == "abandon" ]]; then
+        echo "$previous_stage" > "${WORK_DIR}/.abandon-origin"
+        echo "[abandon] Saved origin stage '${previous_stage}'"
+      fi
       ;;
 
     *)
@@ -679,6 +729,19 @@ done
 # ══════════════════════════════════════════════════════════════════
 #  COMPLETE
 # ══════════════════════════════════════════════════════════════════
+
+# Abandoned workflows end here: no CI gate, no PR-ready. The abandon
+# skill already closed the PR/issue/branch per the user's decision.
+if [[ -f "${WORK_DIR}/.abandoned" ]]; then
+  printf '{"stage":"abandoned","completed_at":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > "${WORK_DIR}/.current-stage"
+  echo ""
+  echo "═══════════════════════════════════════════════════════════"
+  echo "  Workflow ABANDONED for issue #${ISSUE}"
+  echo "  See ${WORK_DIR}/Abandon.md for the case and the decision."
+  echo "═══════════════════════════════════════════════════════════"
+  exit 0
+fi
 
 printf '{"stage":"done","completed_at":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   > "${WORK_DIR}/.current-stage"

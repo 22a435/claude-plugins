@@ -5,7 +5,7 @@
     {
       "name": "issue-workflow",
       "source": "./issue-workflow",
-      "description": "Autonomous issue-to-PR workflow with 8 Claude Code stages"
+      "description": "Autonomous issue-to-PR workflow orchestrating staged Claude Code sessions"
     },
     {
       "name": "deep-review",
