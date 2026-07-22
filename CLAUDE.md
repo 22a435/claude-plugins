@@ -71,7 +71,7 @@ Pure bash state machines. They:
 3. Loop through stages, invoking `claude --model <model> --effort <effort> "/<skill-prefix>:<stage> <arg>"`
 4. Handle stage transitions via `.next-stage` signal files written by skills
 5. Validate transitions against `ALLOWED_TRANSITIONS` map
-6. Enforce loop safety (5 per-stage, 25 global max)
+6. Enforce loop safety (issue-workflow: 10 per-stage, 40 global max; deep-review/triage: 5 per-stage, 25 global max)
 
 Key orchestrator patterns:
 - **`refresh_env()`** -- re-sources PATH from a login shell after stages that install tools
