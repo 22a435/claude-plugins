@@ -103,13 +103,15 @@ declare -A STAGE_DOC=(
 
 # ── Model assignments (configurable via env vars) ─────────────────
 # Override all stages: ISSUE_WORKFLOW_MODEL=sonnet
-# Override one stage: ISSUE_WORKFLOW_MODEL_RESEARCH=fable[1m]
+# Override one stage: ISSUE_WORKFLOW_MODEL_RESEARCH=opus[1m]
 # Per-stage env var takes precedence over the global override.
+# Research, interview, and plan default to fable[1m]: they shape every
+# downstream stage, and depth of judgment matters most there.
 declare -A STAGE_MODEL=(
   [setup]="${ISSUE_WORKFLOW_MODEL_SETUP:-${ISSUE_WORKFLOW_MODEL:-haiku}}"
-  [research]="${ISSUE_WORKFLOW_MODEL_RESEARCH:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [interview]="${ISSUE_WORKFLOW_MODEL_INTERVIEW:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
-  [plan]="${ISSUE_WORKFLOW_MODEL_PLAN:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
+  [research]="${ISSUE_WORKFLOW_MODEL_RESEARCH:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
+  [interview]="${ISSUE_WORKFLOW_MODEL_INTERVIEW:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
+  [plan]="${ISSUE_WORKFLOW_MODEL_PLAN:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
   [execute]="${ISSUE_WORKFLOW_MODEL_EXECUTE:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
   [debug]="${ISSUE_WORKFLOW_MODEL_DEBUG:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
   [verify]="${ISSUE_WORKFLOW_MODEL_VERIFY:-${ISSUE_WORKFLOW_MODEL:-opus[1m]}}"
