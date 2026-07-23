@@ -108,7 +108,7 @@ declare -A STAGE_DOC=(
 # Research, interview, and plan default to fable[1m]: they shape every
 # downstream stage, and depth of judgment matters most there.
 declare -A STAGE_MODEL=(
-  [setup]="${ISSUE_WORKFLOW_MODEL_SETUP:-${ISSUE_WORKFLOW_MODEL:-haiku}}"
+  [setup]="${ISSUE_WORKFLOW_MODEL_SETUP:-${ISSUE_WORKFLOW_MODEL:-opus}}"
   [research]="${ISSUE_WORKFLOW_MODEL_RESEARCH:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
   [interview]="${ISSUE_WORKFLOW_MODEL_INTERVIEW:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
   [plan]="${ISSUE_WORKFLOW_MODEL_PLAN:-${ISSUE_WORKFLOW_MODEL:-fable[1m]}}"
