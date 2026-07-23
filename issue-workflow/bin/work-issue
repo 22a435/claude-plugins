@@ -644,8 +644,22 @@ INTEG_EOF
   case "$current_stage" in
     # ── SETUP (inline -- unique logic, not a skill) ────────────
     setup)
-      # Create or switch to branch
-      git fetch origin main 2>/dev/null || true
+      # New work must base on a verifiably CURRENT origin/main: workers
+      # sit parked on old feature branches between workflows and nothing
+      # else updates refs, so a silently-failed fetch here would mean
+      # silently building on a stale base. Fatal by design.
+      if ! git fetch origin main; then
+        echo "Error: cannot fetch origin/main -- refusing to start new work from a possibly-stale base."
+        exit 1
+      fi
+      # Keep the local main ref current too (ff-only, best effort):
+      # stale local main foot-guns anything that resolves 'main' rather
+      # than 'origin/main' (local CI, diff baselines, humans debugging).
+      if [[ "$(git symbolic-ref --short HEAD 2>/dev/null)" == "main" ]]; then
+        git merge --ff-only origin/main 2>/dev/null || true
+      else
+        git fetch origin main:main 2>/dev/null || true
+      fi
       if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
         echo "Branch ${BRANCH} exists. Switching to it."
         git checkout "$BRANCH"

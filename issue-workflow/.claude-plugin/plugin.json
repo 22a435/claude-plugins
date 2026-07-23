@@ -1,6 +1,6 @@
 {
   "name": "issue-workflow",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "Autonomous issue-to-PR workflow: multi-stage state machine with research, planning, execution, debugging, verification, review, integration, and user-gated abandonment",
   "author": { "name": "22a435" },
   "repository": "https://github.com/22a435/claude-plugins",
