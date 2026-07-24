@@ -392,6 +392,17 @@ clean_signal_file() {
   rm -f "${WORK_DIR}/.next-stage"
 }
 
+ensure_workdir() {
+  # The transient stage signal (.next-stage) is consumed within seconds
+  # and must never be committed: a tracked copy merged to main once made
+  # workflow runtime state leak into every checkout (observed with the
+  # issue-workflow plugin). The work dir .gitignore enforces it on any
+  # target repo.
+  mkdir -p "$WORK_DIR"
+  [[ -f "${WORK_DIR}/.gitignore" ]] \
+    || printf '.next-stage\n.session-result.json\n' > "${WORK_DIR}/.gitignore"
+}
+
 # ── Local CI pre-ready gate ───────────────────────────────────────
 # The verify skill records the repo's local CI command plus a content
 # hash of the validated tree in <work-dir>/.local-ci-state (committed).
@@ -548,6 +559,8 @@ while true; do
              exit 1 ;;
     esac
   fi
+
+  ensure_workdir
 
   # Refresh PATH from login shell to pick up tools installed by prior stages
   refresh_env

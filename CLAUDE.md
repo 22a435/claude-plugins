@@ -80,6 +80,7 @@ Key orchestrator patterns:
 - **Trivial integration** -- if main hasn't diverged, the integrate stage skips Claude entirely and handles it inline in bash
 - **Debug origin tracking** -- `issue-workflow` saves which stage triggered debug in `.debug-origin` so debug can return to the correct stage; `.abandon-origin` does the same for the abandon stage (declining an abandon returns to the origin, and only the origin)
 - **Local CI pre-ready gate** -- `issue-workflow` and `deep-review` check a committed `.local-ci-state` marker (local CI command + tree-content hash excluding the work dir, written by the verify skill) before `gh pr ready`; stale state re-runs local CI inline or re-enters verify, and the PR stays draft if local CI cannot go green
+- **Stage-state lifecycle** (`issue-workflow`) -- `.current-stage` / `.debug-origin` / `.abandon-origin` are committed to the workflow branch at each stage transition (`commit_stage_state`, branch-guarded so setup on main never commits) so a dead worker's run can resume from a fresh pull on any machine; `clear_stage_state` untracks them right before `gh pr ready`, so anything mergeable is state-free and merged checkouts never look like active workflows to fleet tooling. The transients (`.next-stage`, `.session-result.json`) are never committable -- `ensure_workdir` writes a work-dir `.gitignore` enforcing this in all three plugins. `.local-ci-state` stays committed by design
 
 ### Skills (`skills/<stage>/SKILL.md`)
 
