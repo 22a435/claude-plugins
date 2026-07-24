@@ -432,6 +432,56 @@ clean_signal_file() {
   rm -f "${WORK_DIR}/.next-stage"
 }
 
+# ── Stage-state lifecycle ─────────────────────────────────────────
+# .current-stage / .debug-origin / .abandon-origin are committed to the
+# workflow branch DELIBERATELY at each stage transition, so a dead
+# worker's run can resume from a fresh pull on any machine. They are
+# removed from tracking by clear_stage_state before the PR goes ready:
+# a merged checkout with a live-looking .current-stage reads as an
+# active workflow to fleet tooling (a copy frozen mid-run at "review"
+# once made every fresh pull of main look busy with a finished issue).
+# The transient signals (.next-stage, .session-result.json) are never
+# committable -- the work dir's .gitignore enforces it.
+STATE_FILES=(.current-stage .debug-origin .abandon-origin .gitignore)
+
+ensure_workdir() {
+  mkdir -p "$WORK_DIR"
+  [[ -f "${WORK_DIR}/.gitignore" ]] \
+    || printf '.next-stage\n.session-result.json\n' > "${WORK_DIR}/.gitignore"
+}
+
+commit_stage_state() {
+  # Only ever commit on the workflow branch (setup runs on main).
+  [[ "$(git symbolic-ref --short HEAD 2>/dev/null)" == "$BRANCH" ]] || return 0
+  local files=() f
+  for f in "${STATE_FILES[@]}"; do
+    [[ -f "${WORK_DIR}/${f}" ]] && files+=("${WORK_DIR}/${f}")
+  done
+  [[ ${#files[@]} -eq 0 ]] && return 0
+  git add -- "${files[@]}" 2>/dev/null || return 0
+  git diff --cached --quiet -- "${files[@]}" 2>/dev/null && return 0
+  git commit --quiet -m "claude-work(state): ${current_stage} [#${ISSUE}]" \
+    -- "${files[@]}" >/dev/null 2>&1 || return 0
+  git push --quiet origin "$BRANCH" >/dev/null 2>&1 || true
+}
+
+clear_stage_state() {
+  # The branch is about to become mergeable: drop the runtime state
+  # files so the merge carries only documents. The .gitignore stays
+  # (it keeps transients uncommittable on every checkout), and the
+  # CI-gate tree hash excludes claude-work/, so this cannot go stale.
+  local files=() f
+  for f in .current-stage .debug-origin .abandon-origin; do
+    git ls-files --error-unmatch "${WORK_DIR}/${f}" >/dev/null 2>&1 \
+      && files+=("${WORK_DIR}/${f}")
+  done
+  [[ ${#files[@]} -eq 0 ]] && return 0
+  git rm --quiet -- "${files[@]}" >/dev/null 2>&1 || return 0
+  git commit --quiet -m "claude-work(state): clear runtime state before ready [#${ISSUE}]" \
+    -- "${files[@]}" >/dev/null 2>&1 || return 0
+  git push --quiet origin "$BRANCH" >/dev/null 2>&1 || true
+}
+
 # ── Local CI pre-ready gate ───────────────────────────────────────
 # The verify skill records the repo's local CI command plus a content
 # hash of the validated tree in <work-dir>/.local-ci-state (committed).
@@ -598,11 +648,14 @@ while true; do
     esac
   fi
 
-  # Live stage state for external monitors (untracked, like .next-stage)
-  mkdir -p "$WORK_DIR"
+  # Live stage state for external monitors, committed to the workflow
+  # branch each transition for cross-machine resume (see the
+  # stage-state lifecycle block above).
+  ensure_workdir
   printf '{"stage":"%s","started_at":"%s","run_count":%s}\n' \
     "$current_stage" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${STAGE_RUN_COUNTS[$current_stage]}" \
     > "${WORK_DIR}/.current-stage"
+  commit_stage_state
 
   # Refresh PATH from login shell to pick up tools installed by prior stages
   refresh_env
@@ -670,8 +723,8 @@ INTEG_EOF
         git checkout -b "$BRANCH" origin/main
       fi
 
-      # Create work directory
-      mkdir -p "$WORK_DIR"
+      # Create work directory (writes the transient-signal .gitignore)
+      ensure_workdir
 
       # Write Issue.md (header uses variable expansion; body appended literally
       # via printf to prevent command injection from issue text)
@@ -760,6 +813,13 @@ if [[ -f "${WORK_DIR}/.abandoned" ]]; then
   exit 0
 fi
 
+# Before the PR can go ready (and thus merge), untrack the runtime
+# state files -- the deletion commit lands ahead of `gh pr ready`, so
+# anything mergeable is already state-free. The draft path keeps them
+# tracked: the branch is still resumable work, not a merge candidate.
+[[ "$PR_STAY_DRAFT" == "true" ]] || clear_stage_state
+
+# Local, untracked from here on: fleet status for this worker only.
 printf '{"stage":"done","completed_at":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   > "${WORK_DIR}/.current-stage"
 
