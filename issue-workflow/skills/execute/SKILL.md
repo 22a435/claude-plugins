@@ -22,7 +22,7 @@ This skill is one stage of a multi-stage issue-to-PR workflow orchestrated by th
 - **No self-loop:** Do not use `/loop`, `ScheduleWakeup`, or recursive `claude` invocations to re-run this skill. For short waits, run the command synchronously with `Bash` (it blocks until completion); for long waits, use `Bash` with `run_in_background` and `Monitor`. If you cannot finish in one pass, commit your partial progress and write your own stage name to `.next-stage` -- the orchestrator re-enters the stage within its loop-safety limits. Never re-invoke yourself.
 - **Deferral hierarchy (never silently drop, never over-file):** Pre-existing bugs are not grounds for dismissal -- leave the codebase in the best working order regardless of origin. When work surfaces that you will not finish in this PR, walk this hierarchy and stop at the first tier that fits: **(1) Fix it in this PR** -- the default, and hard; "complex", "tedious", "touches many files", or "would take a while" are NOT reasons to defer, only a genuine Create-Issue criterion is (a tradeoff the user must decide / architectural refactor / high blast radius / team discussion / breaking upgrade / benchmark-needed). **(2) Append to a follow-up already filed in this run** -- if a follow-up you filed (or will file) this run naturally covers it, add it there rather than opening a second issue. **(3) Append to an existing open backlog issue** -- before filing anything new, search the backlog (`gh issue list --state open --limit 200 --json number,title,labels,body`); if an open issue already covers the area, comment the new context onto it instead of creating a duplicate. **(4) File one new, bundled issue** -- only if no tier above fits; bundle every co-deferred finding from this run that shares a subsystem or design decision into the SAME issue (one well-scoped issue, never one-per-finding). Filing a follow-up is a commitment that the proper fix exceeds this PR's scope -- not a way to avoid work; never leave a deferred finding as a document-only note, and record which tier each deferral took and why.
 - **Read issues in full:** When you read a GitHub issue, read the *entire* thread -- the body **and every comment/reply** -- plus any linked issues, PRs, commits, or docs that look relevant. Critical scope and context often live in replies, not the original body; missing them causes under-scoped work. Treat the whole thread as the source of truth for what the issue actually asks.
-- **Session result:** After your final commit/push and PR/issue comment, as the very LAST step of the session, write `./claude-work/$0/.session-result.json` (overwrite if present; do NOT commit it): `{"stage": "<this stage>", "outcome": "complete|partial|blocked", "next_stage_signal": "<stage written to .next-stage, or null>", "summary": "<1-3 factual sentences on what happened>", "artifacts": ["<key files produced or changed>"], "follow_ups": ["<issue refs filed, if any>"], "timestamp": "<UTC ISO-8601>"}`. External tooling reads this file to understand session state -- write it even when blocked or partial.
+- **Session result:** After your final commit/push and PR/issue comment, as the very LAST step of the session, write `./claude-work/$0/.session-result.json` (overwrite if present; do NOT commit it): `{"stage": "<this stage>", "outcome": "complete|partial|blocked", "next_stage_signal": "<stage written to .next-stage, or null>", "summary": "<1-3 factual sentences on what happened>", "artifacts": ["<key files produced or changed>"], "follow_ups": ["<issue refs filed, if any>"], "operator_request": {"command": "<slash command a human must run before this session ends, or omit the field entirely>", "reason": "<why it cannot be run from here>"}, "timestamp": "<UTC ISO-8601>"}`. External tooling reads this file to understand session state -- write it even when blocked or partial. Include `operator_request` **only** when a command genuinely requires a human to type it; it is a request for one more action in THIS session, not a note for later.
 - **Abandoning:** If you conclude the ISSUE itself should not ship (already fixed on main, obsolete, invalid, superseded -- not merely difficult), do not tear anything down yourself: record your reasoning in your stage document, write `abandon` to `./claude-work/$0/.next-stage`, and end the session. A dedicated user-gated abandon stage will present the case and act only on explicit user approval.
 
 ## Completeness Requirement
@@ -80,26 +80,35 @@ Follow the execution order from the plan. For each batch of parallelizable compo
 
 5. **Proceed to the next batch** once all components in the current batch pass verification (or are documented as failures).
 
-### Step 3: Code Review Pass
+### Step 3: Review Passes
 
-After all components are implemented and verified, run `/code-review --fix` as a cleanup pass on the changed code. **Skip this step entirely if any component failed verification** -- there is no point reviewing code that will change during a debug cycle.
+After all components are implemented and verified, run the review passes below. **Skip this step entirely if any component failed verification** -- there is no point reviewing code that will change during a debug cycle.
 
-`/code-review` is a sub-skill that returns control to you when it finishes. **Returning from `/code-review` is NOT the end of this stage.** Steps 4 and 5 below are mandatory and must still run after `/code-review` completes. Do not declare the stage done, do not skip writing Execute.md, do not skip the commit/push, and do not post the PR comment until Step 5.
+`/code-review --fix` is the pass this stage wants, and **you cannot invoke it**: it is marked `disable-model-invocation`, so it is reachable only when a human types it. Two rules follow, and they are absolute:
+
+- **Never substitute another skill for it.** A hand-rolled or adjacent reviewer is a differently-shaped, weaker thing wearing the same name, and reporting it as the code review is how this stage claims a review it did not get.
+- **Never report it as done.** It is outstanding until a human runs it. Say so plainly.
+
+Run what you *can* invoke, then hand the rest off.
 
 1. Capture the pre-review file list:
    ```bash
-   git diff --name-only HEAD > /tmp/pre-codereview-files-$0.txt
+   git diff --name-only HEAD > /tmp/pre-review-files-$0.txt
    ```
 
-2. Invoke the skill: `/code-review --fix`. The `--fix` flag applies the findings to the working tree -- without it, the skill only reports.
+2. Run the model-invocable passes, in order:
+   - `/security-review` -- correctness and security sweep over the branch changes. This is the autonomous safety net; without it the unattended path gets no correctness pass at all.
+   - `/simplify` -- reuse, simplification, and altitude cleanups. Quality only: it does not hunt for bugs, which is exactly why it is not a stand-in for `/code-review`.
+
+   These are sub-skills that return control to you. **Returning from them is NOT the end of this stage.** Steps 4 and 5 are mandatory and must still run. Do not declare the stage done, do not skip writing Execute.md, do not skip the commit/push, and do not post the PR comment until Step 5.
 
 3. When control returns, capture what changed:
    ```bash
    git diff --name-only HEAD
    ```
-   Compare against the pre-review list to identify files `/code-review` modified. Note any summary the skill emitted.
+   Compare against the pre-review list to identify what each pass modified. Note any summary each skill emitted.
 
-4. Record these results for inclusion in Step 4's Execute.md write -- specifically the "Code Review Pass" section. If `/code-review` made no changes, record "No changes recommended."
+4. Record these results for Step 4's Execute.md write -- specifically the "Review Passes" section -- including that `/code-review --fix` is still outstanding. If a pass made no changes, record "No changes recommended."
 
 5. **Continue immediately to Step 4.** Do not stop, do not summarize back to the user, do not commit yet -- the stage is not complete until Step 5 finishes.
 
@@ -136,10 +145,14 @@ Brief overview: what was implemented, how long it took, any issues encountered.
 - **Blocked components:** <components that depend on this one and were skipped>
 - **Context:** <any relevant observations about why it might be failing>
 
-## Code Review Pass
-What `/code-review` found and changed (or "No changes recommended" or "Skipped -- component failures require debug"):
-- `path/to/file.ts` -- <what was simplified>
-- ...
+## Review Passes
+What each pass found and changed (or "No changes recommended" or "Skipped -- component failures require debug"):
+
+- **`/security-review`:**
+  - `path/to/file.ts` -- <what was flagged or fixed>
+- **`/simplify`:**
+  - `path/to/file.ts` -- <what was simplified>
+- **`/code-review --fix`: OUTSTANDING** -- not model-invocable; awaiting a human run. (Or, if the operator ran it during this session: what it found and changed.)
 
 ## Implementation Notes
 Any observations, deviations from the plan, or things the verify/review stages should be aware of. If any component had to be reduced in scope, explain WHY and confirm the user approved that reduction (cross-reference Interview.md or the user message that authorized it).
@@ -160,6 +173,30 @@ Post a summary to the PR thread:
 ```bash
 gh pr comment --body "<execution summary>"
 ```
+
+### Step 6: Hand the review pass back
+
+Unless Step 3 was skipped (component failures route to debug), end your final
+message with the outstanding review request, on its own line and verbatim:
+
+```
+REVIEW PASS OUTSTANDING -- run: /code-review --fix
+```
+
+Then record the same request in the session result (see Workflow Context):
+
+```json
+"operator_request": {
+  "command": "/code-review --fix",
+  "reason": "disable-model-invocation: reachable only when a human types it"
+}
+```
+
+This is the whole point of the stage ending here rather than exiting: the
+session stays open so that one command can still land in it, and whatever it
+changes is picked up by verify. Report the stage as complete in every other
+respect -- this is an outstanding action, not a failure, and not a reason to
+signal `debug`.
 
 ## Stage Transition Signal
 

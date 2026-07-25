@@ -91,6 +91,7 @@ Skill conventions:
 - **Subagent write boundary:** Subagents must NOT write to the work directory -- only the parent session writes output documents.
 - **Subagent cost optimization:** Information-gathering agents use `model: "sonnet"`. Parent sessions (opus) handle synthesis.
 - **Commit format:** `claude-work(<stage>): <desc> [#<issue>]` (issue-workflow), `claude-review(<stage>): <desc> [session #<N>]` (deep-review), or `claude-triage(<stage>): <desc> [session #<N>]` (triage)
+- **Human-only commands:** A skill marked `disable-model-invocation` cannot be invoked by a session -- `/code-review` is one, and an attempt at it silently degrades into nothing or into a weaker substitute wearing the same name. Skills must never simulate one or report it as done. Instead they run the model-invocable passes (`/security-review`, `/simplify`), then hand off: the final message ends with `REVIEW PASS OUTSTANDING -- run: /code-review --fix`, and issue-workflow's `.session-result.json` carries `operator_request: {command, reason}`. The session deliberately stays open so the command can land in it, rather than exiting and losing the context
 
 ### Hooks
 
