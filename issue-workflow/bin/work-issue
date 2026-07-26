@@ -754,11 +754,26 @@ ISSUE_EOF
       git commit -m "claude-work: begin issue #${ISSUE} -- ${ISSUE_TITLE}"
       git push -u origin "$BRANCH"
 
-      # Run environment setup via Claude
+      # Run environment setup via Claude.
+      #
+      # This is a plain invocation rather than a skill, so nothing here
+      # produced the completion record every other stage writes. External
+      # tooling reads .session-result.json to tell "this stage finished"
+      # from "this stage is still working", and without one a setup session
+      # sitting on a finished report is indistinguishable from one mid-
+      # install -- an unattended run parks here until a human notices. The
+      # instruction below is the same contract the skills follow.
+      setup_prompt="Check this repo's CLAUDE.md, README, and look for setup scripts (scripts/setup.sh, Makefile setup targets, package.json scripts, etc.). Run whatever is needed to initialize the development environment. Report what you did when complete.
+
+As the very LAST step of this session, write \`./claude-work/${ISSUE}/.session-result.json\` (overwrite if present; do NOT commit it):
+
+{\"stage\": \"setup\", \"outcome\": \"complete|partial|blocked\", \"next_stage_signal\": null, \"summary\": \"<1-3 factual sentences on what you did>\", \"artifacts\": [], \"follow_ups\": [], \"timestamp\": \"<UTC ISO-8601>\"}
+
+Write it even when the environment could not be fully initialized -- \`partial\` or \`blocked\`, with the reason in the summary. Nothing comes after it."
       echo ""
       echo "Launching Claude to run repo-specific setup..."
       echo ""
-      claude --model "$stage_model" --effort "$stage_effort" "Check this repo's CLAUDE.md, README, and look for setup scripts (scripts/setup.sh, Makefile setup targets, package.json scripts, etc.). Run whatever is needed to initialize the development environment. Report what you did when complete."
+      claude --model "$stage_model" --effort "$stage_effort" "$setup_prompt"
 
       current_stage="research"
       ;;
