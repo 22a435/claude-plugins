@@ -577,11 +577,20 @@ if [[ "$current_stage" != "setup" ]]; then
   git fetch origin main 2>/dev/null || true
   current_branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
   if [[ "$current_branch" != "$BRANCH" ]]; then
+    # A resume may land on a machine that has never seen this branch --
+    # re-running integrate on a finished workflow is the case that
+    # matters, since any free worker should be able to service any
+    # branch. The branch carries its own work directory, so fetching it
+    # is all that is needed.
+    if ! git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
+      echo "Branch ${BRANCH} is not local; fetching from origin."
+      git fetch origin "${BRANCH}:${BRANCH}" 2>/dev/null || true
+    fi
     if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
       echo "Switching to branch ${BRANCH} (was on ${current_branch:-detached HEAD})."
       git checkout "$BRANCH"
     else
-      echo "Error: branch ${BRANCH} does not exist. Cannot resume without it."
+      echo "Error: branch ${BRANCH} does not exist locally or on origin. Cannot resume without it."
       echo "Run without --resume to start from setup."
       exit 1
     fi
