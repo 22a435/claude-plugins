@@ -98,37 +98,17 @@ Follow the execution order from the plan. For each batch of parallelizable remed
    - Continue to next batch if current batch succeeded
    - If a remediation failed: document it but continue with unblocked remediations
 
-### Step 3: Review Passes
+### Step 3: Review Pass (operator-run)
 
-After all remediations are applied, run the review passes below as a final cleanup on the changes made.
+Once all remediations are applied, the changes need a `/code-review --fix` pass as a final cleanup.
 
-`/code-review --fix` is the pass this stage wants, and **you cannot invoke it**: it is marked `disable-model-invocation`, so it is reachable only when a human types it. Two rules follow, and they are absolute:
+**You cannot run it.** `/code-review` is marked `disable-model-invocation`, so it is reachable only when a human types it. Three rules follow, and they are absolute:
 
-- **Never substitute another skill for it.** An adjacent reviewer is a differently-shaped, weaker thing wearing the same name, and reporting it as the code review is how this stage claims a review it did not get.
+- **Never substitute another skill for it.** `/simplify` and `/security-review` are each a subset of what it does; an adjacent reviewer is a differently-shaped, weaker thing wearing the same name, and reporting one as the code review is how this stage claims a review it did not get.
 - **Never report it as done.** It is outstanding until a human runs it. Say so plainly.
+- **Do not run other slash-command passes in its place.** Beyond the substitution problem, a skill that ends its turn by reporting to the user -- `/security-review` does this -- strands the stage where it stands: the remaining steps never run and an unattended session sits idle forever. Nothing that might end the turn belongs before steps that must run.
 
-Run what you *can* invoke, then hand the rest off.
-
-1. Capture the pre-review file list:
-   ```bash
-   git diff --name-only HEAD > /tmp/pre-review-files-$0.txt
-   ```
-
-2. Run the model-invocable passes, in order:
-   - `/security-review` -- correctness and security sweep over the branch changes. This is the autonomous safety net; without it the unattended path gets no correctness pass at all.
-   - `/simplify` -- reuse, simplification, and altitude cleanups. Quality only: it does not hunt for bugs, which is exactly why it is not a stand-in for `/code-review`.
-
-   These are sub-skills that return control to you. **Returning from them is NOT the end of this stage.** Steps 4-7 below are mandatory and must still run. Specifically: GitHub issues from the remediation plan are not yet created, Remediation.md has not been written, nothing has been committed, and no PR comment has been posted. Do not declare the stage done or hand control back to the orchestrator until Step 7 finishes.
-
-3. When control returns, capture what changed:
-   ```bash
-   git diff --name-only HEAD
-   ```
-   Compare against the pre-review list to identify what each pass modified. Note any summary each skill emitted.
-
-4. Record these results for inclusion in Step 5's Remediation.md write -- specifically the "Review Passes" section -- including that `/code-review --fix` is still outstanding. If a pass made no changes, record "No changes recommended."
-
-5. **Continue immediately to Step 4 (Create GitHub Issues).** Do not stop, do not summarize back to the user, do not commit yet -- the stage is not complete until Step 7 finishes.
+So this stage runs no review pass itself. Record `/code-review --fix` as outstanding in Step 5's Remediation.md write, request it in Step 8, and **continue immediately to Step 4 (Create GitHub Issues)** -- do not stop, do not summarize back to the user, do not commit yet. Steps 4-7 are mandatory: GitHub issues from the remediation plan are not yet created, Remediation.md has not been written, nothing has been committed, and no PR comment has been posted. Do not declare the stage done or hand control back to the orchestrator until Step 7 finishes.
 
 ### Step 4: File GitHub Issues (per the plan's dispositions)
 
@@ -179,13 +159,7 @@ Write `./claude-reviews/$0/Remediation.md`:
 
 ### Remediation 2: ...
 
-## Review Passes
-What each pass found and changed (or "No changes recommended"):
-
-- **`/security-review`:**
-  - `path/to/file.ts` -- <what was flagged or fixed>
-- **`/simplify`:**
-  - `path/to/file.ts` -- <what was simplified>
+## Review Pass
 - **`/code-review --fix`: OUTSTANDING** -- not model-invocable; awaiting a human run. (Or, if the operator ran it during this session: what it found and changed.)
 
 ## Issues Created
@@ -231,7 +205,7 @@ gh pr comment "claude/review/$0" --body "**Remediation Complete**
 
 - Remediations applied: <N>/<M>
 - Issues created: <N> (<list issue numbers>)
-- Review passes: /security-review <N> files, /simplify <N> files, /code-review --fix OUTSTANDING
+- Review pass: /code-review --fix OUTSTANDING (awaiting a human run)
 - Failures: <N>
 
 <brief description of key changes made>
